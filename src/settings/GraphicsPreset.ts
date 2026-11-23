@@ -5,8 +5,8 @@ import type { Bindable, BindableNumber } from '../core/Bindable';
  * visual-cost setting at once. `auto` picks a tier for the device.
  */
 export type GraphicsPreset = 'auto' | 'performance' | 'balanced' | 'quality';
-/** A preset that actually names a level of detail. */
-export type GraphicsTier = Exclude<GraphicsPreset, 'auto'>;
+/** A preset that names a level of detail (what `auto` resolves to, and what the user picks). */
+export type GraphicsTier = 'performance' | 'balanced' | 'quality';
 
 /**
  * The graphics settings a preset writes. Deliberately not the whole of
@@ -31,8 +31,8 @@ export interface GraphicsPresetTarget {
     readonly progressGraph: Bindable<boolean>;
 }
 
-/** What each tier sets. `balanced` is wosu!'s own defaults with the costliest extras off. */
-const TIERS: Record<GraphicsTier, {
+/** The values a preset writes, as plain data (so the benchmark can build its own set). */
+export interface GraphicsValues {
     resolutionScale: number;
     antialias: boolean;
     parallax: boolean;
@@ -46,7 +46,10 @@ const TIERS: Record<GraphicsTier, {
     cursorRipples: boolean;
     hideFollowPoints: boolean;
     progressGraph: boolean;
-}> = {
+}
+
+/** What each tier sets. `balanced` is wosu!'s own defaults with the costliest extras off. */
+export const TIERS: Record<GraphicsTier, GraphicsValues> = {
     // Everything that costs per-frame time off, and the frame rendered at
     // three quarters of the screen's pixels (the single biggest saving on a
     // weak GPU: fill rate, not JavaScript).
@@ -70,7 +73,7 @@ const TIERS: Record<GraphicsTier, {
         resolutionScale: 1,
         antialias: true,
         parallax: true,
-        backgroundBlur: 0.2,
+        backgroundBlur: 0,
         backgroundVideo: false,
         storyboard: true,
         hitLighting: true,
@@ -101,7 +104,11 @@ const TIERS: Record<GraphicsTier, {
 
 /** Write `tier`'s values into the graphics settings (the UI rows show them change). */
 export function applyGraphicsTier(s: GraphicsPresetTarget, tier: GraphicsTier): void {
-    const v = TIERS[tier];
+    applyGraphicsValues(s, TIERS[tier]);
+}
+
+/** Write explicit values into the graphics settings (populated by the benchmark). */
+export function applyGraphicsValues(s: GraphicsPresetTarget, v: GraphicsValues): void {
     s.resolutionScale.value = v.resolutionScale;
     s.antialias.value = v.antialias;
     s.parallax.value = v.parallax;
@@ -120,45 +127,4 @@ export function applyGraphicsTier(s: GraphicsPresetTarget, tier: GraphicsTier): 
 /** What the preset sets for `tier` (for the settings row's summary). */
 export function graphicsTierValues(tier: GraphicsTier): Readonly<typeof TIERS[GraphicsTier]> {
     return TIERS[tier];
-}
-
-/** The hints auto-detection reads (a subset of `navigator`, plus the screen). */
-export interface DeviceHints {
-    /** `navigator.deviceMemory` in GB (browsers cap it at 8), or 0 when unknown. */
-    deviceMemory: number;
-    /** `navigator.hardwareConcurrency` (logical cores), or 0 when unknown. */
-    cores: number;
-    /** A phone or tablet: a mobile user agent, or a coarse pointer with no hover. */
-    mobile: boolean;
-}
-
-/** Read the hints from the browser. */
-export function deviceHints(nav: Navigator = navigator, win: Window = window): DeviceHints {
-    const n = nav as Navigator & { deviceMemory?: number; userAgentData?: { mobile?: boolean } };
-    const mobile = n.userAgentData?.mobile === true
-        || /Android|iPhone|iPad|iPod|Mobile|Silk/i.test(nav.userAgent)
-        // A touch screen with no mouse: a tablet in disguise, or a phone's "desktop site".
-        || (win.matchMedia?.('(pointer: coarse)').matches === true && win.matchMedia?.('(hover: hover)').matches === false);
-    return {
-        deviceMemory: typeof n.deviceMemory === 'number' ? n.deviceMemory : 0,
-        cores: typeof nav.hardwareConcurrency === 'number' ? nav.hardwareConcurrency : 0,
-        mobile,
-    };
-}
-
-/**
- * Which tier `auto` means on a device. Phones and low-power machines get the
- * performance tier; anything else gets the balanced look. `quality` is never
- * picked automatically: the default should not spend frames on eye candy.
- */
-export function detectGraphicsTier(h: DeviceHints): GraphicsTier {
-    if (h.mobile) return 'performance';
-    if (h.deviceMemory > 0 && h.deviceMemory <= 4) return 'performance';
-    if (h.cores > 0 && h.cores <= 4) return 'performance';
-    return 'balanced';
-}
-
-/** The tier a preset stands for right now (auto detects). */
-export function resolveGraphicsPreset(preset: GraphicsPreset, hints: DeviceHints): GraphicsTier {
-    return preset === 'auto' ? detectGraphicsTier(hints) : preset;
 }

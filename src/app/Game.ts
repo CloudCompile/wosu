@@ -26,6 +26,7 @@ import { textureFromBlob, TextureCache, textureFromUrl } from '../graphics/textu
 import { InputManager, KeyPriority } from '../input/InputManager';
 import { resolveBindings, type Action } from '../input/bindings';
 import { openFileDialog } from '../input/PointerLock';
+import { loadBenchmark } from '../settings/benchmarkStore';
 import { pointerLockWanted } from '../input/pointerLockPolicy';
 import { TextInputProxy } from '../input/TextInputProxy';
 import { BeatmapApi } from '../online/BeatmapApi';
@@ -38,6 +39,7 @@ import { NotificationManager, type Notification } from '../overlays/notification
 import { NotificationOverlay } from '../overlays/notifications/NotificationOverlay';
 import { ToastTray } from '../overlays/notifications/ToastTray';
 import { NowPlayingOverlay } from '../overlays/NowPlayingOverlay';
+import type { PersonalizeOverlay } from '../overlays/settings/PersonalizeOverlay';
 import type { SettingsOverlay } from '../overlays/settings/SettingsOverlay';
 import { Toolbar } from '../overlays/Toolbar';
 import { VolumeOverlay } from '../overlays/VolumeOverlay';
@@ -103,6 +105,8 @@ export class Game {
     readonly toasts: ToastTray;
     /** Built on first use or in idle time after the menu shows (see LazyOverlay). */
     readonly settingsOverlay: LazyOverlay<SettingsOverlay>;
+    /** Settings → Graphics → Personalize: benchmarks this device. */
+    readonly personalize: LazyOverlay<PersonalizeOverlay>;
     readonly listing: LazyOverlay<BeatmapListingOverlay>;
     readonly notificationOverlay: NotificationOverlay;
     readonly nowPlaying: NowPlayingOverlay;
@@ -125,6 +129,18 @@ export class Game {
     static async boot(host: HTMLElement): Promise<Game> {
         const settings = new GameSettings();
         settings.load();
+        // What the last benchmark measured, so `auto` uses the real numbers
+        // rather than the renderer's name (and the panel can show them).
+        const measured = loadBenchmark();
+        if (measured) {
+            settings.measured = {
+                at: measured.at,
+                cpuIndex: measured.cpuIndex,
+                gpuName: measured.gpuName,
+                fill: measured.fill,
+                quads: measured.quads,
+            };
+        }
         const assets = Promise.all([loadFonts(), Cursor.loadTextures()]);
         assets.catch(() => { /* awaited below */ });
         const app = new App();
@@ -142,6 +158,7 @@ export class Game {
         skin.load();
         installBitmapFonts(app.renderer.resolution);
         loading.destroy();
+        settings.refreshDeviceInfo();
         const game = new Game(app, settings, skin, skins, cursorTextures);
         await game.start();
         return game;
@@ -208,15 +225,17 @@ export class Game {
         // Placeholders keep the deferred overlays' stacking order.
         const listingSlot = new Container();
         const settingsSlot = new Container();
+        const personalizeSlot = new Container();
         const profileSlot = new Container();
         this.listing = this.lazyOverlay(listingSlot, (m, g) => new m.BeatmapListingOverlay(g));
         this.settingsOverlay = this.lazyOverlay(settingsSlot, (m, g) => new m.SettingsOverlay(g));
         this.notificationOverlay = this.overlays.register(new NotificationOverlay(this));
         this.nowPlaying = this.overlays.register(new NowPlayingOverlay(this));
         this.profile = new LocalProfile(settings);
+        this.personalize = this.lazyOverlay(personalizeSlot, (m, g) => new m.PersonalizeOverlay(g));
         this.profileOverlay = this.lazyOverlay(profileSlot, (m, g) => new m.ProfileOverlay(g));
         this.dialog = this.overlays.register(new DialogOverlay(this));
-        app.overlayLayer.addChild(listingSlot, settingsSlot, this.notificationOverlay, this.nowPlaying, profileSlot, this.dialog);
+        app.overlayLayer.addChild(listingSlot, settingsSlot, personalizeSlot, this.notificationOverlay, this.nowPlaying, profileSlot, this.dialog);
         this.volume = new VolumeOverlay(this);
 
         // The toolbar mirrors overlay state, so it is built after them.
@@ -470,9 +489,10 @@ export class Game {
         s.uiSounds.bind(v => (this.uiSounds.enabled = v), true);
         s.uiScale.bind(v => this.app.setUiScale(v), true);
         // Picking a preset sets every visual-cost setting at once (auto
-        // detects for this device). Not immediate: on launch the values are
-        // already in the settings, and re-applying would undo the user's
-        // tweaks to the individual rows.
+        // detects for this device). Bound without the immediate flag: the
+        // saved values are already in the settings (load() applied the
+        // preset on a first run), and re-applying on launch would undo
+        // the user's tweaks to the individual rows.
         s.graphicsPreset.bind(preset => s.applyGraphicsPreset(preset));
         s.resolutionScale.bind(v => this.app.setResolutionScale(v));
         s.frameLimit.bind(v => this.app.setFrameLimit(v), true);

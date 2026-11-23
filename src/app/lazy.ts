@@ -7,6 +7,7 @@
  * the first screen. One chunk on purpose: the host bills every request.
  */
 export { SettingsOverlay } from '../overlays/settings/SettingsOverlay';
+export { PersonalizeOverlay } from '../overlays/settings/PersonalizeOverlay';
 export { BeatmapListingOverlay } from '../overlays/BeatmapListingOverlay';
 export { ProfileOverlay } from '../overlays/profile/ProfileOverlay';
 export { SongSelectScreen } from '../screens/select/SongSelectScreen';

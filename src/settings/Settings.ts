@@ -6,7 +6,11 @@ import { DEFAULT_MECHANICS, type GameplayMechanics } from '../gameplay/scoring/m
 import { SENSITIVITY_MAX, SENSITIVITY_MIN } from '../input/RelativePointer';
 import { sanitizeManiaKeys } from '../gameplay/mania/layout';
 import { DEFAULT_WOSU_SKIN, sanitizeWosuSkin, type WosuSkinOptions } from '../skin/wosu/options';
-import { applyGraphicsTier, deviceHints, resolveGraphicsPreset, type GraphicsPreset } from './GraphicsPreset';
+import {
+    applyGraphicsTier, applyGraphicsValues, type GraphicsPreset, type GraphicsPresetTarget,
+} from './GraphicsPreset';
+import { describeTiers, deviceHints, resolveTiers, valuesForTiers, type DeviceTiers } from './deviceTiers';
+import { formatAge } from './benchmarkStore';
 
 export type SongSort = 'title' | 'artist' | 'creator' | 'difficulty' | 'length' | 'bpm' | 'dateAdded' | 'lastPlayed';
 /** lazer's HUDVisibilityMode. */
@@ -186,9 +190,20 @@ export class GameSettings {
     /** True when a renderer change needs a reload to apply. */
     readonly restartRequired = new Bindable(false);
 
+    /**
+     * Lines the Graphics section shows about this device (tiers, last
+     * benchmark). Bindables so the rows follow, but never saved: they are
+     * derived from the benchmark store and the browser.
+     */
+    readonly deviceTiers = new Bindable('');
+    readonly deviceBenchmark = new Bindable('');
+
+    /** Bindables that mirror derived state rather than user choices. */
+    private static readonly TRANSIENT = new Set(['deviceTiers', 'deviceBenchmark']);
+
     constructor() {
         for (const [key, value] of Object.entries(this)) {
-            if (value instanceof Bindable && key !== 'restartRequired') {
+            if (value instanceof Bindable && key !== 'restartRequired' && !GameSettings.TRANSIENT.has(key)) {
                 this.registry.set(key, value as Bindable<unknown>);
                 value.changed.add(() => this.queueSave());
             }
@@ -225,10 +240,52 @@ export class GameSettings {
     /**
      * Apply the current graphics preset: every visual-cost setting at once.
      * The individual rows then hold the values, so later launches leave the
-     * user's own tweaks alone.
+     * user's own tweaks alone (the benchmark's recommendations are written
+     * the same way).
      */
-    applyGraphicsPreset(preset: GraphicsPreset = this.graphicsPreset.value): void {
-        applyGraphicsTier(this, resolveGraphicsPreset(preset, deviceHints()));
+    applyGraphicsPreset(preset: GraphicsPreset = this.graphicsPreset.value, tiers?: DeviceTiers): void {
+        if (preset === 'auto') {
+            applyGraphicsValues(this as GraphicsPresetTarget, valuesForTiers(tiers ?? this.detectTiers()));
+            return;
+        }
+        applyGraphicsTier(this, preset);
+    }
+
+    /**
+     * What the benchmark last learned about this device (null before it has
+     * run). Seeded from storage by Game; not saved as settings, because the
+     * benchmark report already holds them.
+     */
+    measured: {
+        at: number | null;
+        cpuIndex: number | null;
+        gpuName: string | null;
+        fill: number | null;
+        quads: number | null;
+    } = { at: null, cpuIndex: null, gpuName: null, fill: null, quads: null };
+
+    /** Recompute the two device lines the Graphics section shows. */
+    refreshDeviceInfo(): void {
+        const tiers = this.detectTiers();
+        const gpu = this.measured.gpuName ? ` · ${this.measured.gpuName.replace(/^ANGLE \\(|\\)$/g, '')}` : '';
+        this.deviceTiers.value = `${describeTiers(tiers)}${gpu}`;
+        this.deviceBenchmark.value = this.measured.at
+            ? `Last benchmark ${formatAge(this.measured.at)}: render scale ${Math.round(this.resolutionScale.value * 100)}%, ${describeTiers(tiers)}.`
+            : 'Not benchmarked on this device yet. Personalize measures the CPU and GPU and picks a render scale that fits this display.';
+    }
+
+    /**
+     * This device's tiers: the benchmark's numbers when it has run (a
+     * measured CPU index, the renderer's name), else the browser's hints.
+     */
+    detectTiers(): DeviceTiers {
+        const m = this.measured;
+        return resolveTiers({
+            hints: deviceHints(),
+            gpuName: m.gpuName,
+            cpuIndex: m.cpuIndex,
+            gpuScores: m.fill !== null && m.quads !== null ? { fill: m.fill, quads: m.quads } : null,
+        });
     }
 
     /** Apply a plain object of values; unknown keys and bad types are ignored. */

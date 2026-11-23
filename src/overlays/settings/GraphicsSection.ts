@@ -2,7 +2,7 @@ import type { RendererPreference } from '../../app/App';
 import type { Game } from '../../app/Game';
 import { frameLimitOptions } from '../../app/frameLimit';
 import { Colors } from '../../ui/theme';
-import { checkboxRow, dropdownRow, mult, noticeRow, pct, sliderRow, textRow } from './rows';
+import { buttonRow, checkboxRow, dropdownRow, mult, noticeRow, pct, sliderRow, textRow } from './rows';
 import type { GraphicsPreset } from '../../settings/GraphicsPreset';
 import type { SectionDef } from './types';
 
@@ -12,6 +12,19 @@ export function graphicsSection(game: Game): SectionDef {
     const fallback = game.app.fellBackFrom === 'webgpu' ? ' (WebGPU was requested but is unavailable here)' : '';
     const latency = game.app.lowLatency ? ', low latency'
         : game.app.lowLatencyUnsupported ? '; this browser can\'t do low latency mode' : '';
+    // What the device measures as, and how the last benchmark went: both
+    // come from the settings, so a run in the Personalize panel updates
+    // these lines without rebuilding the section.
+    const tiers = textRow('', { color: Colors.grayA, size: 12, keywords: 'cpu gpu device detected tier' });
+    const bench = textRow('', { color: Colors.gray9, size: 12, keywords: 'benchmark result last run measured' });
+    const follow = (b: typeof s.deviceTiers, target: typeof tiers): void => {
+        b.bind(v => {
+            target.block.content = v;
+            target.row.onLayoutChange?.();
+        }, true);
+    };
+    follow(s.deviceTiers, tiers);
+    follow(s.deviceBenchmark, bench);
     return {
         id: 'graphics',
         title: 'Graphics',
@@ -28,10 +41,19 @@ export function graphicsSection(game: Game): SectionDef {
                     ], s.graphicsPreset, {
                         keywords: 'preset quality performance low end fast speed fps lag stutter resolution storyboard video blur',
                         description: 'Sets render resolution, anti-aliasing, background parallax, blur and video, storyboards, hit lighting, '
-                            + 'combo bursts, the cursor trail and follow points all at once. Automatic picks Performance on phones and '
-                            + 'low-memory machines and Balanced elsewhere. Changing a single setting below afterwards leaves your own '
-                            + 'choice in place, and later launches keep it.',
+                            + 'combo bursts, the cursor trail and follow points all at once. Automatic reads this device (its CPU, GPU and '
+                            + 'any benchmark you have run) and picks a level for it. Changing a single setting below afterwards leaves your '
+                            + 'own choice in place, and later launches keep it.',
                     }),
+                    tiers.row,
+                    buttonRow('Personalize (benchmark this device)', () => game.personalize.show(), {
+                        icon: 'tachometer',
+                        keywords: 'benchmark test measure personalize cpu gpu stress',
+                        description: 'Measures this device\'s CPU and GPU for about three seconds, shows how fast each part is, and sets '
+                            + 'the render scale and effects to fit. Nothing is overworked: every test runs for a fixed short time, and '
+                            + 'they stop early if the machine can\'t keep up.',
+                    }),
+                    bench.row,
                 ],
             },
             {

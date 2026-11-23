@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { Bindable, BindableNumber } from '../../src/core/Bindable';
 import {
-    applyGraphicsTier, detectGraphicsTier, graphicsTierValues, resolveGraphicsPreset, type GraphicsPresetTarget,
+    applyGraphicsTier, applyGraphicsValues, graphicsTierValues, TIERS, type GraphicsPresetTarget,
 } from '../../src/settings/GraphicsPreset';
+import { valuesForTiers } from '../../src/settings/deviceTiers';
 
 /** The subset of GameSettings a preset writes, as plain bindables. */
 function target(): GraphicsPresetTarget {
@@ -72,22 +73,30 @@ describe('graphics preset', () => {
         }
     });
 
-    it('auto-detects phones and low-power machines as performance', () => {
-        expect(detectGraphicsTier({ mobile: true, deviceMemory: 8, cores: 8 })).toBe('performance');
-        expect(detectGraphicsTier({ mobile: false, deviceMemory: 4, cores: 8 })).toBe('performance');
-        expect(detectGraphicsTier({ mobile: false, deviceMemory: 8, cores: 4 })).toBe('performance');
-    });
-
-    it('auto-detects a capable machine as balanced, never quality', () => {
-        expect(detectGraphicsTier({ mobile: false, deviceMemory: 8, cores: 16 })).toBe('balanced');
-        // Unknown hints are treated as capable rather than crippling the visuals.
-        expect(detectGraphicsTier({ mobile: false, deviceMemory: 0, cores: 0 })).toBe('balanced');
-    });
-
-    it('resolves a named preset to itself', () => {
-        for (const preset of ['performance', 'balanced', 'quality'] as const) {
-            expect(resolveGraphicsPreset(preset, { mobile: true, deviceMemory: 2, cores: 2 })).toBe(preset);
+    it('the balanced tier is wosu!\'s default look', () => {
+        const defaults = target();
+        const s = target();
+        applyGraphicsTier(s, 'balanced');
+        for (const key of Object.keys(TIERS.balanced) as (keyof typeof TIERS.balanced)[]) {
+            expect(s[key].value, key).toBe(defaults[key].value);
         }
-        expect(resolveGraphicsPreset('auto', { mobile: true, deviceMemory: 8, cores: 8 })).toBe('performance');
+    });
+
+    it('applies explicit values, like the benchmark\'s recommendation', () => {
+        const s = target();
+        applyGraphicsValues(s, { ...TIERS.performance, resolutionScale: 0.85, antialias: true });
+        expect(s.resolutionScale.value).toBe(0.85);
+        expect(s.antialias.value).toBe(true);
+        expect(s.storyboard.value).toBe(false);
+    });
+
+    it('keeps a capable machine on the balanced look', () => {
+        // The default must not spend frames on eye candy, even on fast hardware.
+        const s = target();
+        applyGraphicsValues(s, valuesForTiers({ cpu: 'high', gpu: 'high' }));
+        const defaults = target();
+        for (const key of Object.keys(TIERS.balanced) as (keyof typeof TIERS.balanced)[]) {
+            expect(s[key].value, key).toBe(defaults[key].value);
+        }
     });
 });
