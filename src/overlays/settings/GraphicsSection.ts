@@ -3,6 +3,7 @@ import type { Game } from '../../app/Game';
 import { frameLimitOptions } from '../../app/frameLimit';
 import { Colors } from '../../ui/theme';
 import { checkboxRow, dropdownRow, mult, noticeRow, pct, sliderRow, textRow } from './rows';
+import type { GraphicsPreset } from '../../settings/GraphicsPreset';
 import type { SectionDef } from './types';
 
 export function graphicsSection(game: Game): SectionDef {
@@ -16,6 +17,23 @@ export function graphicsSection(game: Game): SectionDef {
         title: 'Graphics',
         icon: 'desktop',
         subsections: [
+            {
+                title: 'Preset',
+                rows: [
+                    dropdownRow<GraphicsPreset>('Graphics preset', [
+                        { value: 'auto', label: 'Automatic (recommended)' },
+                        { value: 'performance', label: 'Performance' },
+                        { value: 'balanced', label: 'Balanced' },
+                        { value: 'quality', label: 'Quality' },
+                    ], s.graphicsPreset, {
+                        keywords: 'preset quality performance low end fast speed fps lag stutter resolution storyboard video blur',
+                        description: 'Sets render resolution, anti-aliasing, background parallax, blur and video, storyboards, hit lighting, '
+                            + 'combo bursts, the cursor trail and follow points all at once. Automatic picks Performance on phones and '
+                            + 'low-memory machines and Balanced elsewhere. Changing a single setting below afterwards leaves your own '
+                            + 'choice in place, and later launches keep it.',
+                    }),
+                ],
+            },
             {
                 title: 'Renderer',
                 rows: [

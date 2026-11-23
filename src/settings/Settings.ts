@@ -6,6 +6,7 @@ import { DEFAULT_MECHANICS, type GameplayMechanics } from '../gameplay/scoring/m
 import { SENSITIVITY_MAX, SENSITIVITY_MIN } from '../input/RelativePointer';
 import { sanitizeManiaKeys } from '../gameplay/mania/layout';
 import { DEFAULT_WOSU_SKIN, sanitizeWosuSkin, type WosuSkinOptions } from '../skin/wosu/options';
+import { applyGraphicsTier, deviceHints, resolveGraphicsPreset, type GraphicsPreset } from './GraphicsPreset';
 
 export type SongSort = 'title' | 'artist' | 'creator' | 'difficulty' | 'length' | 'bpm' | 'dateAdded' | 'lastPlayed';
 /** lazer's HUDVisibilityMode. */
@@ -27,6 +28,7 @@ const ENUM_VALUES: Record<string, readonly string[]> = {
     gameplayMechanics: ['lazer', 'stable'],
     confineMouse: ['never', 'duringGameplay', 'always'],
     menuBackgroundSource: ['skin', 'beatmap'],
+    graphicsPreset: ['auto', 'performance', 'balanced', 'quality'],
 };
 
 const STORAGE_KEY = 'webosu.settings.v2';
@@ -39,6 +41,13 @@ const LEGACY_KEY = 'osugamesettings';
  */
 export class GameSettings {
     // Graphics
+    /**
+     * One choice that sets every visual-cost setting (resolution scale,
+     * antialiasing, storyboard, video, blur, effects): 'auto' resolves to a
+     * tier for this device on first run and is applied again whenever it is
+     * picked. See settings/GraphicsPreset.
+     */
+    readonly graphicsPreset = new Bindable<GraphicsPreset>('auto');
     readonly renderer = new Bindable<RendererPreference>('auto');
     readonly resolutionScale = new BindableNumber(1, 0.5, 1, 0.05);
     readonly uiScale = new BindableNumber(1, 0.8, 1.6, 0.05);
@@ -205,7 +214,21 @@ export class GameSettings {
             } catch (e) {
                 console.warn('settings: legacy migration failed', e);
             }
+            return;
         }
+        // Nothing saved at all: a first run. Turn the graphics preset
+        // ('auto') into concrete values now, before the renderer is created
+        // from them.
+        this.applyGraphicsPreset();
+    }
+
+    /**
+     * Apply the current graphics preset: every visual-cost setting at once.
+     * The individual rows then hold the values, so later launches leave the
+     * user's own tweaks alone.
+     */
+    applyGraphicsPreset(preset: GraphicsPreset = this.graphicsPreset.value): void {
+        applyGraphicsTier(this, resolveGraphicsPreset(preset, deviceHints()));
     }
 
     /** Apply a plain object of values; unknown keys and bad types are ignored. */
@@ -243,6 +266,8 @@ export class GameSettings {
             if (k === 'selectedMods' || k === 'modSettings' || k === 'lastBeatmap' || k === 'playerName' || k === 'bundledBeatmapsFetched' || k === 'bundledSeen' || k === 'audioClockVersion') continue;
             b.setDefault();
         }
+        // As on a first run: the auto preset's values, not its bare name.
+        this.applyGraphicsPreset();
     }
 
     private queueSave(): void {

@@ -469,6 +469,11 @@ export class Game {
         s.effectsVolume.bind(volumes, true);
         s.uiSounds.bind(v => (this.uiSounds.enabled = v), true);
         s.uiScale.bind(v => this.app.setUiScale(v), true);
+        // Picking a preset sets every visual-cost setting at once (auto
+        // detects for this device). Not immediate: on launch the values are
+        // already in the settings, and re-applying would undo the user's
+        // tweaks to the individual rows.
+        s.graphicsPreset.bind(preset => s.applyGraphicsPreset(preset));
         s.resolutionScale.bind(v => this.app.setResolutionScale(v));
         s.frameLimit.bind(v => this.app.setFrameLimit(v), true);
         s.uncappedInMenus.bind(v => this.app.loop.setUncappedInMenus(v), true);

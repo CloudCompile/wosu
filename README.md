@@ -21,6 +21,7 @@ Scoring and judgement follow osu!'s rules closely, but can still differ from off
 - Download beatmaps in-game, with several default beatmaps and the option to import your own
 - Full HUD with difficulty visualization bars, click counters, and more
 - Extra configuration and features like storyboards, beatmap skins and hitsounds, background video, background dim/blur, mouse/keyboard/touch input, volume meters, notifications, a now-playing panel, and everything saved locally in your browser.
+- A graphics preset (Settings → Graphics): Automatic on a fresh install resolves to a level for the device (Performance on phones and low-memory machines, Balanced elsewhere), and Performance / Balanced / Quality set render resolution, anti-aliasing, background effects, storyboards, videos, hit lighting and cursor extras all at once.
 
 ## Controls
 
