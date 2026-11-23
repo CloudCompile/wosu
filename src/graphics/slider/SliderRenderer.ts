@@ -11,6 +11,16 @@ import { boundsOf, capsuleQuads, partialPoints, sliderLutData, type Bounds, type
 
 /** Coverage textures never exceed this size (huge sliders on 4K screens). */
 const MAX_RT_DIM = 2048;
+/** Coverage textures are rounded up to a multiple of this many pixels (see SliderResources.acquireTarget). */
+const RT_BUCKET = 64;
+/** How many spare coverage textures a beatmap keeps for reuse. */
+const RT_POOL_LIMIT = 12;
+
+/** `v` rounded up to an RT_BUCKET step (and capped at MAX_RT_DIM). */
+function bucketDim(v: number): number {
+    const n = Math.max(1, Math.ceil(v));
+    return Math.min(MAX_RT_DIM, Math.ceil(n / RT_BUCKET) * RT_BUCKET);
+}
 
 /**
  * Per-beatmap shared GPU state: compiled programs (both GL and WGSL) and
@@ -24,6 +34,17 @@ export class SliderResources {
 
     readonly lut: Texture;
     readonly rows: number;
+    /**
+     * Spare coverage textures by size. Each slider's coverage needs a render
+     * target of its own while it lives, but sliders come and go for the
+     * whole map: handing the textures round instead of creating and
+     * destroying one per slider per appearance keeps GPU allocations off the
+     * gameplay path (a size change, e.g. a resize, is also usually a pool hit
+     * because sizes are bucketed in 64-px steps).
+     */
+    private readonly rtPool = new Map<string, RenderTexture[]>();
+    private pooled = 0;
+    private gone = false;
 
     constructor(readonly renderer: Renderer, colors: readonly number[], trackOverride: number | null, border: number | null, profile?: SliderProfile) {
         const d = sliderLutData(colors, trackOverride, border, profile);
@@ -63,7 +84,39 @@ export class SliderResources {
     }
 
     destroy(): void {
+        this.gone = true;
+        for (const list of this.rtPool.values()) for (const rt of list) rt.destroy(true);
+        this.rtPool.clear();
+        this.pooled = 0;
         this.lut.destroy(true);
+    }
+
+    /** A coverage texture of exactly `w`×`h` (see `bucketDim`), reused when one is spare. */
+    acquireTarget(w: number, h: number): RenderTexture {
+        const key = `${w}x${h}`;
+        const list = this.rtPool.get(key);
+        const spare = list?.pop();
+        if (spare) {
+            this.pooled--;
+            return spare;
+        }
+        return RenderTexture.create({ width: w, height: h, resolution: 1, antialias: false });
+    }
+
+    /** Hand a coverage texture back for the next slider (its contents are cleared before each use). */
+    releaseTarget(rt: RenderTexture, w: number, h: number): void {
+        if (rt.destroyed) return;
+        // A texture returned after the beatmap's resources are gone has no
+        // owner to reuse it (a stray drawable destroyed late).
+        if (this.gone || this.pooled >= RT_POOL_LIMIT) {
+            rt.destroy(true);
+            return;
+        }
+        const key = `${w}x${h}`;
+        const list = this.rtPool.get(key);
+        if (list) list.push(rt);
+        else this.rtPool.set(key, [rt]);
+        this.pooled++;
     }
 }
 
@@ -179,13 +232,16 @@ export class SliderBody extends Container {
     private ensureTarget(pixelsPerUnit: number): void {
         const b = this.bounds;
         const s = pixelsPerUnit > 0 ? pixelsPerUnit : 1;
-        const w = Math.min(MAX_RT_DIM, Math.max(1, Math.ceil((b.x1 - b.x0) * s)));
-        const h = Math.min(MAX_RT_DIM, Math.max(1, Math.ceil((b.y1 - b.y0) * s)));
+        // Bucketed so that sliders of a similar size share pooled textures,
+        // and a small pixel-scale change (a resize) keeps the same target
+        // instead of rebuilding this slider's coverage from scratch.
+        const w = bucketDim((b.x1 - b.x0) * s);
+        const h = bucketDim((b.y1 - b.y0) * s);
         if (this.rt && this.rtW === w && this.rtH === h) return;
-        // Unbind the old target from its shader before destroying it.
+        // Unbind the old target from its shader before letting it go.
         this.dropComposite();
-        this.rt?.destroy(true);
-        this.rt = RenderTexture.create({ width: w, height: h, resolution: 1, antialias: false });
+        if (this.rt) this.res.releaseTarget(this.rt, this.rtW, this.rtH);
+        this.rt = this.res.acquireTarget(w, h);
         this.rtW = w;
         this.rtH = h;
         // Map bounds → texture pixels for the prepass.
@@ -247,7 +303,7 @@ export class SliderBody extends Container {
         this.prepassShader.destroy();
         this.prepassRoot.destroy();
         this.prepassGeom.destroy(true);
-        this.rt?.destroy(true);
+        if (this.rt) this.res.releaseTarget(this.rt, this.rtW, this.rtH);
         this.rt = null;
         super.destroy({ children: true });
     }

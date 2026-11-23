@@ -257,31 +257,36 @@ export class DrawableSlider extends Container implements Drawable {
     }
 
     private updateTicks(time: number, s: SliderState): void {
+        const base = this.tickScale;
         for (const t of this.ticks) {
             const sp = t.sprite;
             const hit = s.eventHit[t.eventIndex];
-            const base = this.tickScale;
             if (time < t.appear) {
-                sp.visible = false;
+                if (sp.visible) sp.visible = false;
                 continue;
             }
-            sp.visible = true;
+            if (!sp.visible) sp.visible = true;
             const since = time - t.appear;
+            // Only write what changed: this runs for every tick of every live
+            // slider each frame, and most ticks keep their look for frames at
+            // a time (a write dirties the batch).
+            let alpha: number;
+            let scale = -1;
+            let tint = -1;
             if (hit === null || time < t.event.time) {
-                sp.alpha = clamp01(since / 150);
-                sp.scale.set(base * (0.5 + 0.5 * ease.OutElasticHalf(clamp01(since / 600))));
-                sp.tint = 0xffffff;
-                continue;
-            }
-            const dt = time - t.event.time;
-            if (hit) {
-                sp.alpha = 1 - clamp01(dt / 150);
-                sp.scale.set(base * (1 + 0.5 * ease.OutQuad(clamp01(dt / 150))));
+                alpha = clamp01(since / 150);
+                scale = base * (0.5 + 0.5 * ease.OutElasticHalf(clamp01(since / 600)));
+                tint = 0xffffff;
             } else {
-                sp.alpha = 1 - clamp01(dt / 150);
-                sp.tint = 0xff3333;
+                const dt = time - t.event.time;
+                alpha = 1 - clamp01(dt / 150);
+                if (hit) scale = base * (1 + 0.5 * ease.OutQuad(clamp01(dt / 150)));
+                else tint = 0xff3333;
             }
-            if (sp.alpha <= 0) sp.visible = false;
+            if (sp.alpha !== alpha) sp.alpha = alpha;
+            if (scale >= 0 && sp.scale.x !== scale) sp.scale.set(scale);
+            if (tint >= 0 && sp.tint !== tint) sp.tint = tint;
+            if (alpha <= 0 && sp.visible) sp.visible = false;
         }
     }
 

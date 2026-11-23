@@ -430,16 +430,16 @@ export function calculateTimedAttributes(beatmap: PlayableBeatmap, opts: Attribu
     };
     const out: OsuDifficultyAttributes[] = [];
     const stride = Math.max(1, Math.ceil(objs.length / 250));
-    let counts = { circles: 0, sliders: 0, spinners: 0, combo: 0 };
-    let aggregates = { speedNotes: 0, difficultSliders: 0, aimStrains: 0, speedStrains: 0 };
+    // Mutated in place: this runs per object, and a fresh object per object
+    // was pure garbage (as was the per-stride `aggregates` rebuild).
+    const counts = { circles: 0, sliders: 0, spinners: 0, combo: 0 };
+    const aggregates = { speedNotes: 0, difficultSliders: 0, aimStrains: 0, speedStrains: 0 };
     for (let i = 0; i < objs.length; i++) {
         const h = objs[i];
-        counts = {
-            circles: counts.circles + (h.kind === 'circle' ? 1 : 0),
-            sliders: counts.sliders + (h.kind === 'slider' ? 1 : 0),
-            spinners: counts.spinners + (h.kind === 'spinner' ? 1 : 0),
-            combo: counts.combo + comboOf(h),
-        };
+        if (h.kind === 'circle') counts.circles++;
+        else if (h.kind === 'slider') counts.sliders++;
+        else if (h.kind === 'spinner') counts.spinners++;
+        counts.combo += comboOf(h);
         if (i > 0) {
             const k = i - 1;
             const cur = objects[k];
@@ -456,12 +456,10 @@ export function calculateTimedAttributes(beatmap: PlayableBeatmap, opts: Attribu
         const aimValue = aim.difficultyValue();
         const speedValue = speed.difficultyValue();
         if (i % stride === 0 || i === objs.length - 1) {
-            aggregates = {
-                speedNotes: relevantCount(speed.strains, speed.maxStrain),
-                difficultSliders: relevantCount(sliderStrains, maxSliderStrain),
-                aimStrains: aim.countTopWeighted(aimValue),
-                speedStrains: speed.countTopWeighted(speedValue),
-            };
+            aggregates.speedNotes = relevantCount(speed.strains, speed.maxStrain);
+            aggregates.difficultSliders = relevantCount(sliderStrains, maxSliderStrain);
+            aggregates.aimStrains = aim.countTopWeighted(aimValue);
+            aggregates.speedStrains = speed.countTopWeighted(speedValue);
         }
         let aimRating = Math.sqrt(aimValue) * DIFFICULTY_MULTIPLIER;
         const aimNoSlidersRating = Math.sqrt(aimNoSliders.difficultyValue()) * DIFFICULTY_MULTIPLIER;

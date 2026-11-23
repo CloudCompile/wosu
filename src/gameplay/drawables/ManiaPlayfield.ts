@@ -59,7 +59,14 @@ export class ManiaPlayfield extends Container {
     private readonly stage = new Graphics();
     private readonly noteLayer = new Container();
     private readonly keyLayer = new Container();
-    private readonly views = new Map<number, NoteView>();
+    /**
+     * Live note views by note index, plus the indices of the live ones. An
+     * array rather than a Map: the sweep visits every live note each frame,
+     * and iterating a Map allocated a fresh `[index, view]` pair per note per
+     * frame.
+     */
+    private readonly views: (NoteView | null)[] = [];
+    private readonly live: number[] = [];
     private readonly noteTextures: Texture[];
     private readonly glowTexture: Texture;
     private readonly receptorSprites: Sprite[] = [];
@@ -210,11 +217,13 @@ export class ManiaPlayfield extends Container {
         this.judgements.update(50);
         render();
         this.judgements.clear();
-        for (const v of this.views.values()) {
-            v.head?.destroy();
-            v.body?.destroy();
+        for (const index of this.live) {
+            const v = this.views[index];
+            v?.head?.destroy();
+            v?.body?.destroy();
         }
-        this.views.clear();
+        this.live.length = 0;
+        this.views.length = 0;
         this.next = 0;
     }
 
@@ -241,7 +250,8 @@ export class ManiaPlayfield extends Container {
         }
         this.noteLayer.addChild(head);
         const view: NoteView = { note, head, body };
-        this.views.set(index, view);
+        this.views[index] = view;
+        this.live.push(index);
         return view;
     }
 
@@ -260,7 +270,12 @@ export class ManiaPlayfield extends Container {
             this.next++;
         }
 
-        for (const [index, v] of this.views) {
+        const live = this.live;
+        let kept = 0;
+        for (let r = 0; r < live.length; r++) {
+            const index = live[r];
+            const v = this.views[index];
+            if (v === null) continue;
             const n = v.note;
             const s = this.states[index];
             const headY = Math.min(MANIA_JUDGEMENT_Y, this.noteY(time, n.time));
@@ -269,7 +284,9 @@ export class ManiaPlayfield extends Container {
             // then a hit or miss animation. A hold's head lives on (frozen)
             // until its tail; a tap's is gone once it has faded.
             if (v.head) {
-                v.head.position.set(n.x, headY);
+                // A frozen hold head sits on the judgement line for its whole
+                // body: skip the write when nothing moved.
+                if (v.head.y !== headY || v.head.x !== n.x) v.head.position.set(n.x, headY);
                 if (s.result === null) {
                     // Beyond the sweep: keep drawing it a moment (the fail look).
                     v.head.alpha = time > n.time + this.beatmap.difficulty.windowMiss + 40 ? 0.6 : 1;
@@ -318,12 +335,17 @@ export class ManiaPlayfield extends Container {
             }
 
             if (!v.head && !v.body) {
-                this.views.delete(index);
+                this.views[index] = null;
                 continue;
             }
             // Out of view (past the judgement line after its window): drop it.
-            if (time > n.endTime + 1500) this.release(index, v);
+            if (time > n.endTime + 1500) {
+                this.release(index, v);
+                continue;
+            }
+            live[kept++] = index;
         }
+        live.length = kept;
 
         // Keys: light a column while its key is held.
         for (let c = 0; c < this.keys; c++) {
@@ -338,7 +360,7 @@ export class ManiaPlayfield extends Container {
     private release(index: number, v: NoteView): void {
         if (v.head && !v.head.destroyed) v.head.destroy();
         if (v.body && !v.body.destroyed) v.body.destroy();
-        this.views.delete(index);
+        this.views[index] = null;
     }
 
     /** lazer's fail animation: the notes fall away and fade (see Playfield.failDrop). */
@@ -355,10 +377,11 @@ export class ManiaPlayfield extends Container {
     }
 
     override destroy(): void {
-        for (const idx of [...this.views.keys()]) {
-            const v = this.views.get(idx)!;
-            this.release(idx, v);
+        for (const index of this.live) {
+            const v = this.views[index];
+            if (v) this.release(index, v);
         }
+        this.live.length = 0;
         super.destroy({ children: true });
     }
 }

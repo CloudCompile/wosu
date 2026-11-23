@@ -111,6 +111,9 @@ export class HUDOverlay extends Container {
     private readonly breakInfo: BreakOverlay;
     private readonly env: HudEnv;
     private elements: HudElement[] = [];
+    /** `elements` indexed by id and by type (the per-frame lookups). */
+    private readonly byId = new Map<string, HudElement>();
+    private readonly byType = new Map<string, HudElement>();
     /** The saved layout in effect, or null for the built-in one. */
     private custom: HudLayout | null = null;
     /** Ctrl held: show the HUD whatever the mode (lazer's HoldForHUD). */
@@ -212,6 +215,12 @@ export class HUDOverlay extends Container {
         for (const e of old.values()) e.destroy();
         this.content.removeChildren();
         this.elements = next;
+        this.byId.clear();
+        this.byType.clear();
+        for (const e of next) {
+            this.byId.set(e.id, e);
+            if (!this.byType.has(e.type)) this.byType.set(e.type, e);
+        }
         for (const e of next) {
             // The built-in rules place the components themselves.
             if (!this.custom) {
@@ -379,7 +388,7 @@ export class HUDOverlay extends Container {
         const area: Area = { w: this.areaW, h: this.h };
         const unit = layoutUnit(this.areaW, this.h, this.settings.hudScale.value);
         for (const entry of layout.elements) {
-            const e = this.elements.find(x => x.id === entry.id);
+            const e = this.byId.get(entry.id);
             if (!e) continue;
             const pl = resolvePlacement(entry, area, unit);
             e.prepare(pl.scale, area);
@@ -393,7 +402,7 @@ export class HUDOverlay extends Container {
     }
 
     private find(type: HudElement['type']): HudElement | null {
-        return this.elements.find(e => e.type === type) ?? null;
+        return this.byType.get(type) ?? null;
     }
 
     /** The built-in layouts (wosu!'s default, lazer's legacy). */
@@ -538,7 +547,7 @@ export class HUDOverlay extends Container {
         if (this.custom) {
             // Components sized to their text keep their origin's edge in place.
             for (const entry of this.custom.elements) {
-                const e = this.elements.find(x => x.id === entry.id);
+                const e = this.byId.get(entry.id);
                 if (!e?.dynamicBox) continue;
                 const o = originPoint(e.box(), entry.origin);
                 e.view.position.set(-o.x, -o.y);

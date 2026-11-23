@@ -69,6 +69,13 @@ interface Entry {
 export class TimedSounds {
     private readonly entries = new Map<string, Entry>();
     private timeline = Number.NaN;
+    /**
+     * `at + KEEP_S` of the earliest entry still to forget. `sync` runs every
+     * frame but only needs to walk the map once that moment has passed, so
+     * the common frame is O(1) instead of a full sweep (and a sweep's Map
+     * iteration allocates a pair per entry).
+     */
+    private nextExpiry = -Infinity;
 
     constructor(
         private readonly clock: SoundTimeline,
@@ -92,7 +99,14 @@ export class TimedSounds {
             this.cancelPending();
         }
         const now = this.now();
-        for (const [key, e] of this.entries) if (e.at + KEEP_S < now) this.entries.delete(key);
+        if (now < this.nextExpiry) return;
+        let next = Infinity;
+        for (const [key, e] of this.entries) {
+            const expiry = e.at + KEEP_S;
+            if (expiry < now) this.entries.delete(key);
+            else if (expiry < next) next = expiry;
+        }
+        this.nextExpiry = next;
     }
 
     has(key: string): boolean {
@@ -108,7 +122,10 @@ export class TimedSounds {
         if (this.entries.has(key)) return;
         const now = this.now();
         const at = startTimeFor(this.clock.contextTimeAt(ms), now);
-        this.entries.set(key, { at: at || now, sound: start(at) });
+        const entry = { at: at || now, sound: start(at) };
+        this.entries.set(key, entry);
+        const expiry = entry.at + KEEP_S;
+        if (expiry < this.nextExpiry) this.nextExpiry = expiry;
     }
 
     /**
@@ -145,6 +162,8 @@ export class TimedSounds {
                 this.entries.delete(key);
             }
         }
+        // The earliest forgettable moment changed: let the next sync recompute it.
+        this.nextExpiry = -Infinity;
     }
 
     get size(): number {

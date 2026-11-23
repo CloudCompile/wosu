@@ -89,6 +89,30 @@ export function setIdFromFilename(name: string | undefined): number | null {
     return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+/**
+ * Yield to the browser between chunks of a long import: `scheduler.yield`
+ * where it exists (it keeps task priority and lets input through), else a
+ * macrotask, so the work is split across frames instead of running as one
+ * long task.
+ */
+function nextTask(): Promise<void> {
+    const s = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+    if (s?.yield) return s.yield();
+    // A MessageChannel task is a real macrotask (input gets a turn) that,
+    // unlike a nested setTimeout, isn't clamped to 4 ms.
+    if (typeof MessageChannel === 'function') {
+        return new Promise<void>(resolve => {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = () => {
+                channel.port1.close();
+                resolve();
+            };
+            channel.port2.postMessage(0);
+        });
+    }
+    return new Promise<void>(resolve => setTimeout(resolve, 0));
+}
+
 /** 64-bit FNV-1a-ish fallback when SubtleCrypto is unavailable (insecure origins). */
 function fallbackHash(bytes: Uint8Array): string {
     let h1 = 0x811c9dc5, h2 = 0x01000193 ^ 0x5bd1e995;
@@ -249,7 +273,8 @@ export class BeatmapLibrary {
         const previous = this.byKey.get(key);
 
         const previousDiffs = previous ? [...previous.difficulties, ...(previous.hidden ?? [])] : [];
-        const allDifficulties = std.map(p => {
+        const allDifficulties: DifficultySummary[] = [];
+        for (const p of std) {
             const summary = summarizeDifficulty(p.data, p.file);
             // Keep official star ratings learned earlier (online lookup) on re-import.
             const known = previousDiffs.find(d =>
@@ -258,8 +283,14 @@ export class BeatmapLibrary {
                 summary.stars = known.stars;
                 summary.starSource = known.starSource;
             }
-            return summary;
-        }).sort(compareDifficulties);
+            allDifficulties.push(summary);
+            // Rating a difficulty builds and processes the whole map (a few ms
+            // for a normal one, tens for a long one): let a frame land between
+            // them, so importing a set with many difficulties doesn't run as a
+            // single long task.
+            if (allDifficulties.length < std.length) await nextTask();
+        }
+        allDifficulties.sort(compareDifficulties);
         // Difficulties deleted from this set stay deleted on re-import
         // (unless that would leave nothing to play).
         const hiddenFiles = new Set((previous?.hidden ?? []).map(d => d.file));

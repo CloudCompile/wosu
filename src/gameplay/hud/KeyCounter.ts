@@ -127,7 +127,17 @@ export class KeyCounter extends Container implements KeyOverlay {
 
     /** osu!mania: one counter per column (keyboard style, labelled by key). */
     setColumns(labels: readonly string[]): void {
-        if (this.columnLabels && this.columnLabels.length === labels.length && this.columnLabels.every((l, i) => l === labels[i])) return;
+        // Called every frame with the same array: an identity check first, then
+        // a plain loop (an `.every` closure per frame was pure garbage).
+        const prev = this.columnLabels;
+        if (prev === labels) return;
+        if (prev && prev.length === labels.length) {
+            let same = true;
+            for (let i = 0; i < labels.length; i++) {
+                if (prev[i] !== labels[i]) { same = false; break; }
+            }
+            if (same) { this.columnLabels = labels; return; }
+        }
         this.columnLabels = labels;
         for (const c of this.removeChildren()) c.destroy({ children: true });
         this.keys = labels.map((name, i) => this.makeKey(name, KEY_COLOR, i));

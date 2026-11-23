@@ -22,7 +22,7 @@ import { StoryboardView } from '../../gameplay/StoryboardView';
 import { GameplayClock } from '../../gameplay/GameplayClock';
 import { GameplayRules, type CursorState, type JudgementRules, type SliderState, type SpinnerState } from '../../gameplay/GameplayRules';
 import { MANIA_LABEL } from '../../gameplay/scoring/ScoreProcessor';
-import { ManiaScoreProcessor } from '../../gameplay/scoring/ManiaScoreProcessor';
+import { ManiaScoreProcessor, type ManiaJudgementCounts } from '../../gameplay/scoring/ManiaScoreProcessor';
 import { ManiaRules, maniaAutoEvents, type ManiaAutoEvent } from '../../gameplay/mania/ManiaRules';
 import { maniaKeyLabels, maniaKeyLayout } from '../../gameplay/mania/layout';
 import { RulesDriver } from '../../gameplay/RulesDriver';
@@ -32,7 +32,7 @@ import { ReplayRecorder } from '../../gameplay/replay/ReplayRecorder';
 import { clampReplaySpeed, replayTrackRate } from '../../gameplay/replay/playbackSpeed';
 import { HitsoundPlayer, nestedSoundTime } from '../../gameplay/HitsoundPlayer';
 import { lookaheadMs, TimedSounds } from '../../gameplay/TimedSounds';
-import { HUDOverlay } from '../../gameplay/hud/HUDOverlay';
+import { HUDOverlay, type HUDState } from '../../gameplay/hud/HUDOverlay';
 import { StablePlayOverlay } from '../../gameplay/hud/StablePlayOverlay';
 import { countdownSchedule } from '../../gameplay/legacyPlayEvents';
 import type { LoopHandle } from '../../audio/SampleBank';
@@ -163,6 +163,19 @@ export class PlayerScreen extends Screen {
     private maniaLabels: string[] = [];
     private readonly autoColumnsDown: boolean[] = [];
     private readonly autoColumnsCounts: number[] = [];
+    /**
+     * The HUD state handed to `hud.update` every frame. Filled in place
+     * (its nested objects too): a fresh one per frame was ~4 allocations a
+     * frame and made the HUD's own reads allocate in turn.
+     */
+    private hudState: HUDState | null = null;
+    private readonly hudColumns: { down: readonly boolean[]; counts: readonly number[]; labels: readonly string[] } =
+        { down: [], counts: [], labels: [] };
+    private readonly hudManiaCounts: ManiaJudgementCounts = { 320: 0, 300: 0, 200: 0, 100: 0, 50: 0, miss: 0 };
+    private readonly hudStats: LiveScoreStats = {
+        great: 0, ok: 0, meh: 0, miss: 0, maxCombo: 0, accuracy: 0,
+        sliderEndsJudged: 0, sliderEndsHit: 0, tickMisses: 0,
+    };
     private mode: InputMode = 'normal';
     /** Feeds the rules (sub-stepped frames, presses, resumes); see RulesDriver. */
     private driver!: RulesDriver;
@@ -368,9 +381,14 @@ export class PlayerScreen extends Screen {
         this.input.timing = this.clock;
         if (mania) {
             // Settings → Input holds a layout per key count; defaults when untouched.
-            const keys = maniaKeyLayout(mania.keys, g.settings.maniaKeys.value);
-            this.input.setColumnKeys(keys);
-            this.maniaLabels = maniaKeyLabels(mania.keys, g.settings.maniaKeys.value);
+            // Rebound live too, so the key overlay's labels follow the keys.
+            const apply = (): void => {
+                this.input.setColumnKeys(maniaKeyLayout(mania.keys, g.settings.maniaKeys.value));
+                // A fresh array each time: the overlay compares its labels by identity.
+                this.maniaLabels = maniaKeyLabels(mania.keys, g.settings.maniaKeys.value);
+            };
+            apply();
+            this.offs.push(g.settings.maniaKeys.bind(apply));
         }
         // Presses on these buttons are theirs (Pixi hit-tests a locked pointer at its virtual cursor too).
         this.input.ignorePointer = (x, y) => {
@@ -863,27 +881,42 @@ export class PlayerScreen extends Screen {
         this.video?.sync(time, this.phase === 'playing' || this.phase === 'completed', this.clock.rate);
         this.storyboard?.update(this.phase === 'failed' ? this.failedAtTime : time, this.phase === 'playing', this.game.audio, { timed: this.timed, until: this.horizon.song });
         this.updateBreakDim(time);
-        this.hud.update(dt, {
-            time,
-            // The mods' rate: a replay's playback speed doesn't change the song's length.
-            rate: playbackRate(this.options.mods),
-            score: this.score.score,
-            accuracy: this.score.accuracy,
-            combo: this.score.combo,
-            maxCombo: this.score.maxCombo,
-            hp: this.health.hp,
-            grade: this.score.grade(this.options.mods.has('HD') || this.options.mods.has('FL')),
-            down: this.keysDown,
-            counts: this.mode === 'autoplay' ? this.autoCounts : this.replay ? this.replay.counts : this.input.counts,
-            // osu!mania: the key overlay counts its columns, the judgement
-            // counter its six tiers.
-            columns: this.mania ? { down: this.columnsDown, counts: this.columnsCounts, labels: this.maniaLabels } : undefined,
-            maniaCounts: this.mania ? (this.score as ManiaScoreProcessor).counts() : undefined,
-            // lazer's localUserPlaying (breaks and the intro count as "not playing").
-            playing: this.phase === 'playing' && time >= this.playStart && !this.hud.isBreak(time) && !this.rules.finished,
-            stats: this.liveStats(),
-            hitErrors: this.rules.hitErrors,
-        });
+        let hud = this.hudState;
+        if (!hud) {
+            hud = this.hudState = {
+                time, rate: 1, score: 0, accuracy: 1, combo: 0, maxCombo: 0, hp: 1, grade: 'D',
+                down: this.keysDown, counts: this.input.counts, playing: false,
+            };
+        }
+        hud.time = time;
+        // The mods' rate: a replay's playback speed doesn't change the song's length.
+        hud.rate = playbackRate(this.options.mods);
+        hud.score = this.score.score;
+        hud.accuracy = this.score.accuracy;
+        hud.combo = this.score.combo;
+        hud.maxCombo = this.score.maxCombo;
+        hud.hp = this.health.hp;
+        hud.grade = this.score.grade(this.options.mods.has('HD') || this.options.mods.has('FL'));
+        hud.down = this.keysDown;
+        hud.counts = this.mode === 'autoplay' ? this.autoCounts : this.replay ? this.replay.counts : this.input.counts;
+        // osu!mania: the key overlay counts its columns, the judgement
+        // counter its six tiers.
+        if (this.mania) {
+            const cols = this.hudColumns;
+            cols.down = this.columnsDown;
+            cols.counts = this.columnsCounts;
+            cols.labels = this.maniaLabels;
+            hud.columns = cols;
+            hud.maniaCounts = (this.score as ManiaScoreProcessor).countsInto(this.hudManiaCounts);
+        } else {
+            hud.columns = undefined;
+            hud.maniaCounts = undefined;
+        }
+        // lazer's localUserPlaying (breaks and the intro count as "not playing").
+        hud.playing = this.phase === 'playing' && time >= this.playStart && !this.hud.isBreak(time) && !this.rules.finished;
+        hud.stats = this.liveStats();
+        hud.hitErrors = this.rules.hitErrors;
+        this.hud.update(dt, hud);
         this.stablePlay.update(this.phase === 'failed' ? this.failedAtTime : time, this.health.hp);
     }
 
@@ -1589,13 +1622,17 @@ export class PlayerScreen extends Screen {
 
     /** The judgements so far, as the pp calculator takes them. */
     private liveStats(): LiveScoreStats {
-        const s = this.score;
-        return {
-            great: s.count300, ok: s.count100, meh: s.count50, miss: s.countMiss,
-            maxCombo: s.maxCombo, accuracy: s.accuracy,
-            sliderEndsJudged: s.sliderEndsTotal, sliderEndsHit: s.sliderEndsHit,
-            tickMisses: s.sliderTicksTotal - s.sliderTicksHit,
-        };
+        const s = this.score, out = this.hudStats;
+        out.great = s.count300;
+        out.ok = s.count100;
+        out.meh = s.count50;
+        out.miss = s.countMiss;
+        out.maxCombo = s.maxCombo;
+        out.accuracy = s.accuracy;
+        out.sliderEndsJudged = s.sliderEndsTotal;
+        out.sliderEndsHit = s.sliderEndsHit;
+        out.tickMisses = s.sliderTicksTotal - s.sliderTicksHit;
+        return out;
     }
 
     /** The play's pp (an estimate, see gameplay/performance), or null if it can't be worked out. */
@@ -1668,19 +1705,22 @@ export class PlayerScreen extends Screen {
 
     /** The difficulty's rating scaled to the mods played (see select/modStars). */
     private playedStars(): number | null {
-        const base = this.options.selection.diff.stars;
+        const diff = this.options.selection.diff;
+        const base = diff.stars;
         const relevant = ratingMods(this.options.mods);
         if (base === null || !relevant) return base;
-        if (this.mania) {
-            // The mania estimate, scaled by how the mods change it (it only reads OD through HR/EZ).
-            const nomod = calculateManiaStars(this.options.data, NO_MODS);
-            const played = calculateManiaStars(this.options.data, relevant);
-            return nomod > 0 ? Math.round(base * (played / nomod) * 100) / 100 : base;
-        }
+        // A locally rated difficulty's `stars` is the nomod rating already, so
+        // the ratio's denominator only needs computing when the shown rating
+        // came from the mirror (as in select/modStars).
+        const online = diff.starSource === 'online';
         try {
-            // Built as song select's modAdjustedStars does (legacy tails), so the figures match.
-            const nomod = calculateDifficulty(buildPlayableBeatmap(this.options.data, NO_MODS)).stars;
-            const played = calculateDifficulty(buildPlayableBeatmap(this.options.data, relevant), playbackRate(relevant)).stars;
+            const played = this.mania
+                ? calculateManiaStars(this.options.data, relevant)
+                : calculateDifficulty(buildPlayableBeatmap(this.options.data, relevant), playbackRate(relevant)).stars;
+            if (!online) return Math.round(played * 100) / 100;
+            const nomod = this.mania
+                ? calculateManiaStars(this.options.data, NO_MODS)
+                : calculateDifficulty(buildPlayableBeatmap(this.options.data, NO_MODS)).stars;
             return nomod > 0 ? Math.round(base * (played / nomod) * 100) / 100 : base;
         } catch {
             return base;

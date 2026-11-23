@@ -5,6 +5,18 @@ import {
 } from './ScoreProcessor';
 
 /**
+ * osu!mania's judgement counts, best first.
+ */
+export interface ManiaJudgementCounts {
+    320: number;
+    300: number;
+    200: number;
+    100: number;
+    50: number;
+    miss: number;
+}
+
+/**
  * osu!mania's score: one judgement per note, 320 / 300 / 200 / 100 / 50 / 0,
  * combo built from every non-miss. A hold is judged twice (its head and its
  * tail are separate notes in lazer), so it is worth two judgements here.
@@ -77,11 +89,19 @@ export class ManiaScoreProcessor {
     }
 
     /** Counts as one judgement per tier, best first (results screens). */
-    counts(): { 320: number; 300: number; 200: number; 100: number; 50: number; miss: number } {
-        return {
-            320: this.count320, 300: this.count300, 200: this.count200,
-            100: this.count100, 50: this.count50, miss: this.countMiss,
-        };
+    counts(): ManiaJudgementCounts {
+        return this.countsInto({ 320: 0, 300: 0, 200: 0, 100: 0, 50: 0, miss: 0 });
+    }
+
+    /** The same, written into `out` (the HUD reads this every frame: no allocation). */
+    countsInto(out: ManiaJudgementCounts): ManiaJudgementCounts {
+        out[320] = this.count320;
+        out[300] = this.count300;
+        out[200] = this.count200;
+        out[100] = this.count100;
+        out[50] = this.count50;
+        out.miss = this.countMiss;
+        return out;
     }
 
     /** Per-tier share of the judgements so far (results bar charts). */

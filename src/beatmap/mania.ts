@@ -127,8 +127,12 @@ export function buildManiaBeatmap(data: BeatmapData, mods: ModSet): PlayableMani
     }
 
     // The standard-compatible view: one circle per note (holds end at their
-    // tail). Only the shared HUD / hitsound / timing code reads it.
-    const hitObjects: PlayableCircle[] = notes.map(n => ({
+    // tail). Only the shared HUD / hitsound / timing code reads it, so it is
+    // built on first use: the star-rating paths (song select, results) build
+    // whole beatmaps without ever touching it, and one circle per note is a
+    // large allocation on a long map.
+    let circles: PlayableCircle[] | null = null;
+    const hitObjects = (): PlayableCircle[] => (circles ??= notes.map(n => ({
         kind: 'circle',
         index: n.index,
         x: n.x,
@@ -143,14 +147,16 @@ export function buildManiaBeatmap(data: BeatmapData, mods: ModSet): PlayableMani
         hitSound: n.hitSound,
         hitSample: n.hitSample,
         control: timeline.at(n.time),
-    }));
+    })));
 
     return {
         data,
         difficulty,
         notes,
         keys,
-        hitObjects,
+        get hitObjects() {
+            return hitObjects();
+        },
         comboColors: data.comboColors,
         startTime,
         endTime,

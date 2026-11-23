@@ -36,10 +36,16 @@ export function modAdjustedStars(game: Game, set: LibrarySet, diff: DifficultySu
         hit = game.library.loadBeatmap(set.key, diff.file).then(data => {
             // osu!mania has its own local estimate (the standard calculator only handles mode 0).
             const mania = data.general.mode === 3;
-            const base = mania ? calculateManiaStars(data, NO_MODS) : calculateDifficulty(buildPlayableBeatmap(data, NO_MODS)).stars;
             const modded = mania
                 ? calculateManiaStars(data, relevant)
                 : calculateDifficulty(buildPlayableBeatmap(data, relevant), playbackRate(relevant)).stars;
+            // A locally rated difficulty's `stars` *is* the nomod rating (see
+            // summary.localStars), so the ratio's denominator is only missing
+            // when the shown rating came from the mirror: recomputing it would
+            // double the work on every scroll (a whole build + difficulty pass).
+            const base = diff.starSource === 'online'
+                ? (mania ? calculateManiaStars(data, NO_MODS) : calculateDifficulty(buildPlayableBeatmap(data, NO_MODS)).stars)
+                : (diff.stars as number);
             if (!(base > 0)) return diff.stars;
             return Math.round((diff.stars as number) * (modded / base) * 100) / 100;
         }).catch(() => diff.stars);

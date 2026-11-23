@@ -77,6 +77,13 @@ export class ManiaRules implements JudgementRules {
     /** Every hold's note index, by tail time (the tail sweep's queue). */
     private readonly tails: number[];
     private tailNext = 0;
+    /**
+     * Notes whose head and whose tail (holds) are still unjudged, counted
+     * instead of rescanned: `finished` is read twice a frame and a scan
+     * would cost O(notes) each time.
+     */
+    private pendingHeads: number;
+    private pendingTails: number;
     private readonly suddenDeath: boolean;
     private readonly perfect: boolean;
     private lastTime = -Infinity;
@@ -103,6 +110,8 @@ export class ManiaRules implements JudgementRules {
         }
         tails.sort((a, b) => this.beatmap.notes[a].endTime - this.beatmap.notes[b].endTime);
         this.tails = tails;
+        this.pendingHeads = this.beatmap.notes.length;
+        this.pendingTails = tails.length;
         this.next = new Array(this.beatmap.keys).fill(0);
         score.comboBroken.add(() => {
             if (this.suddenDeath || this.perfect) health.fail();
@@ -114,13 +123,9 @@ export class ManiaRules implements JudgementRules {
         return { w300: d.windowGreat, w100: d.windowOk, w50: d.windowMeh };
     }
 
+    /** True once every head and every hold's tail has been judged (O(1): counted as they land). */
     get finished(): boolean {
-        for (let i = 0; i < this.states.length; i++) {
-            const s = this.states[i];
-            if (s.result === null) return false;
-            if (this.beatmap.notes[i].isHold && s.tailResult === null) return false;
-        }
-        return true;
+        return this.pendingHeads === 0 && this.pendingTails === 0;
     }
 
     private get meh(): number {
@@ -288,6 +293,7 @@ export class ManiaRules implements JudgementRules {
         if (s.result !== null) return;
         s.result = result;
         s.judgedAt = time;
+        this.pendingHeads--;
         const column = this.beatmap.notes[i].column;
         if (this.recoverable[column] === i) this.recoverable[column] = -1;
         if (error !== null) {
@@ -310,6 +316,7 @@ export class ManiaRules implements JudgementRules {
         if (capped && result !== 'meh' && result !== 'miss') result = 'meh';
         s.tailResult = result;
         s.tailJudgedAt = time;
+        this.pendingTails--;
         s.holding = false;
         s.pressed = false;
         if (this.holding[n.column] === i) this.holding[n.column] = -1;

@@ -133,13 +133,26 @@ export class HealthProcessor {
 
     isDraining(time: number): boolean {
         if (time < this.drainStart || time > this.drainEnd) return false;
-        return !this.noDrain.some(p => time >= p.start && time <= p.end);
+        return !this.inNoDrain(time);
+    }
+
+    /**
+     * Inside a no-drain section (a break). A plain loop, not `.some(closure)`:
+     * `drain` runs on every rules substep, so this was a closure per substep.
+     */
+    private inNoDrain(time: number): boolean {
+        const ranges = this.noDrain;
+        for (let i = 0; i < ranges.length; i++) {
+            const p = ranges[i];
+            if (time >= p.start && time <= p.end) return true;
+        }
+        return false;
     }
 
     /** Apply passive drain for the interval (time − dt, time] (lazer's DrainingHealthProcessor.Update). */
     drain(time: number, dt: number): void {
         if (this.failed || dt <= 0) return;
-        if (this.noDrain.some(p => time >= p.start && time <= p.end)) return;
+        if (this.inNoDrain(time)) return;
         const last = Math.min(this.drainEnd, Math.max(this.drainStart, time - dt));
         const current = Math.min(this.drainEnd, Math.max(this.drainStart, time));
         if (current <= last) return;
