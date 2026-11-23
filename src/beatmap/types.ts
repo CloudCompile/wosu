@@ -64,7 +64,7 @@ export interface ControlPoint {
 
 export type CurveType = 'B' | 'L' | 'P' | 'C';
 
-export type HitObjectKind = 'circle' | 'slider' | 'spinner';
+export type HitObjectKind = 'circle' | 'slider' | 'spinner' | 'mania';
 
 /** Raw [HitObjects] row, decoded but not processed. */
 export interface HitObjectData {
@@ -87,6 +87,9 @@ export interface HitObjectData {
     edgeSets?: { normalSet: SampleSet; additionSet: SampleSet }[];
     // spinner
     endTime?: number;
+    // mania (mode 3): a note, or a hold when `isHold` is set. The column
+    // comes from `x` (see maniaColumnFor); holds use `endTime`.
+    isHold?: boolean;
 }
 
 export interface BeatmapGeneral {
@@ -280,6 +283,57 @@ export interface ControlPointTimeline {
     readonly points: readonly ControlPoint[];
     /** Effective control state at `time` (binary search). */
     at(time: number): ControlPoint;
+}
+
+/** A judgement column's playable note (osu!mania). */
+export interface PlayableManiaNote {
+    /** Index within the beatmap's object list. */
+    index: number;
+    /** Column, 0 = leftmost. */
+    column: number;
+    time: number;
+    /** The note's own time for a tap, the tail's for a hold. */
+    endTime: number;
+    /** A hold note (osu!'s type 128). */
+    isHold: boolean;
+    /** Column centre in playfield units (for judgement text and hit lighting). */
+    x: number;
+    /** Judgement line's y (all mania judgements show there). */
+    y: number;
+    hitSound: number;
+    hitSample: HitSampleInfo;
+}
+
+/** osu!mania difficulty after mod adjustment (CS is the key count). */
+export interface ManiaDifficultyAttributes {
+    keys: number;
+    od: number;
+    hp: number;
+    /** One column's width in playfield units. */
+    columnWidth: number;
+    /** Judgement windows (half-widths) in ms: 320 / 300 / 200 / 100 / 50 / miss. */
+    windowPerfect: number;
+    windowGreat: number;
+    windowGood: number;
+    windowOk: number;
+    windowMeh: number;
+    windowMiss: number;
+    /** How long a note takes to scroll from the top of the field to the judgement line. */
+    scrollTime: number;
+}
+
+/**
+ * osu!mania's playable map. `notes` is what the mania rules judge; the
+ * rest of PlayableBeatmap is a compatibility view for the shared Player
+ * code (HUD progress marks, hitsounds, timing): `hitObjects` holds one
+ * plain circle per note (holds end at their tail) and `difficulty` carries
+ * standard-shaped values alongside the mania ones (its CS is the key
+ * count, its preempt the scroll time).
+ */
+export interface PlayableManiaBeatmap extends PlayableBeatmap {
+    difficulty: ManiaDifficultyAttributes & DifficultyAttributes;
+    notes: PlayableManiaNote[];
+    keys: number;
 }
 
 /** Summary used by the library / song select without full processing. */

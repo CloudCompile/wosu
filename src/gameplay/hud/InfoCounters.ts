@@ -156,16 +156,30 @@ const JUDGEMENTS = [
     { name: '50', color: Colors.meh },
     { name: 'Miss', color: Colors.miss },
 ] as const;
+/** osu!mania's six tiers, best first. */
+const MANIA_JUDGEMENTS = [
+    { name: '320', color: 0x66ccff },
+    { name: '300', color: 0xffcc22 },
+    { name: '200', color: 0x66ff66 },
+    { name: '100', color: 0x00ccff },
+    { name: '50', color: 0xffcc00 },
+    { name: 'Miss', color: Colors.miss },
+] as const;
 
-/** lazer's JudgementCounterDisplay: one row per result (300 / 100 / 50 / miss). Origin top-left. */
+/**
+ * lazer's JudgementCounterDisplay: one row per result (300 / 100 / 50 /
+ * miss, or osu!mania's 320 / 300 / 200 / 100 / 50 / miss). Origin top-left.
+ */
 export class JudgementCounter extends Container {
     private readonly counts: BitmapText[] = [];
-    private readonly shown = [-1, -1, -1, -1];
+    private readonly shown: number[];
 
-    constructor() {
+    constructor(mania = false) {
         super();
         this.eventMode = 'none';
-        JUDGEMENTS.forEach((j, i) => {
+        const rows = mania ? MANIA_JUDGEMENTS : JUDGEMENTS;
+        this.shown = new Array(rows.length).fill(-1);
+        rows.forEach((j, i) => {
             const name = counterText(j.name, { size: 18, color: j.color });
             const count = counterText('0', { size: 18 });
             name.y = count.y = i * ROW_H;
@@ -176,12 +190,21 @@ export class JudgementCounter extends Container {
     }
 
     get box(): UnitBox {
-        return { x: 0, y: 0, w: 110, h: JUDGEMENTS.length * ROW_H - 4 };
+        return { x: 0, y: 0, w: 110, h: this.counts.length * ROW_H - 4 };
     }
 
     set(great: number, ok: number, meh: number, miss: number): void {
-        [great, ok, meh, miss].forEach((v, i) => {
-            if (v === this.shown[i]) return;
+        this.setAll([great, ok, meh, miss]);
+    }
+
+    /** osu!mania: 320 / 300 / 200 / 100 / 50 / miss. */
+    setMania(c: { 320: number; 300: number; 200: number; 100: number; 50: number; miss: number }): void {
+        this.setAll([c[320], c[300], c[200], c[100], c[50], c.miss]);
+    }
+
+    private setAll(values: readonly number[]): void {
+        values.forEach((v, i) => {
+            if (i >= this.shown.length || v === this.shown[i]) return;
             this.shown[i] = v;
             this.counts[i].text = String(v);
         });

@@ -236,8 +236,10 @@ export class BeatmapLibrary {
                 console.warn(`[library] skipping unreadable "${file}"`, e);
             }
         }
-        const std = parsed.filter(p => p.data.general.mode === 0 && p.data.hitObjects.length > 0);
-        if (!std.length) throw new Error('No osu!standard difficulties');
+        // osu!standard and osu!mania difficulties are playable; other modes
+        // (taiko, catch) are not, so sets holding only those can't be imported.
+        const std = parsed.filter(p => (p.data.general.mode === 0 || p.data.general.mode === 3) && p.data.hitObjects.length > 0);
+        if (!std.length) throw new Error('No playable difficulties (osu!standard or osu!mania)');
 
         const first = std[0].data;
         const metaSetId = std.map(p => p.data.metadata.beatmapSetId).find(id => id > 0);

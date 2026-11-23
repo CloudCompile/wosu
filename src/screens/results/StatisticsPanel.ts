@@ -102,7 +102,7 @@ export class StatisticsPanel extends UIComponent {
         const facts: [string, string][] = [
             ['LENGTH', formatTime(r.length)],
             ['MAP COMBO', `${formatNumber(r.maxCombo)}/${formatNumber(r.mapMaxCombo)}x`],
-            ['HITS', formatNumber(r.count300 + r.count100 + r.count50 + r.countMiss)],
+            ['HITS', formatNumber(r.count300 + r.count100 + r.count50 + r.countMiss + (r.count320 ?? 0) + (r.count200 ?? 0))],
         ];
         const colW = this.histW / facts.length;
         facts.forEach(([k, v], i) => {

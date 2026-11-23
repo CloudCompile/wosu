@@ -114,7 +114,7 @@ describe('parseOsu', () => {
         expect(tp[1]).toMatchObject({ time: 500, beatLength: -100, uninherited: false, generateTicks: false });
     });
 
-    it('fixes spinner end before start and ignores mania holds', () => {
+    it('fixes spinner end before start and drops mania-only rows in standard maps', () => {
         const text = MAP_BASIC.replace('256,192,3000,12,0,3500', '256,192,3000,12,0,2000') + '64,192,4000,128,0,4500:0:0:0:0:\n';
         const map = parseOsu(text);
         expect(map.hitObjects).toHaveLength(3);

@@ -96,7 +96,7 @@ export function parseOsu(text: string): BeatmapData {
     }
     const hitObjects: HitObjectData[] = [];
     for (const row of objectRows) {
-        const ho = parseHitObject(row);
+        const ho = parseHitObject(row, gen.mode);
         if (ho) hitObjects.push(ho);
     }
     // Some editors emit objects out of order; gameplay assumes sorted.
@@ -316,7 +316,7 @@ const TYPE_NEW_COMBO = 4;
 const TYPE_SPINNER = 8;
 const TYPE_HOLD = 128;
 
-function parseHitObject(row: string): HitObjectData | null {
+function parseHitObject(row: string, mode = 0): HitObjectData | null {
     const p = row.split(',');
     if (p.length < 4) return null;
     const x = Number(p[0]);
@@ -339,6 +339,29 @@ function parseHitObject(row: string): HitObjectData | null {
         comboSkip: (type >> 4) & 7,
         hitSound: Math.trunc(num(p[4], 0)) & 15,
     };
+
+    // osu!mania: notes are type 1, holds are type 128 with
+    // `endTime:hitSample` in the sixth field. `x` is the column position.
+    if (mode === 3) {
+        if (type & TYPE_HOLD) {
+            const parts = (p[5] ?? '').split(':');
+            const endTime = Number(parts[0]);
+            if (!Number.isFinite(endTime)) {
+                console.warn('[parse] dropping hold with bad endTime:', row);
+                return null;
+            }
+            return {
+                kind: 'mania',
+                ...base,
+                isHold: true,
+                endTime: Math.max(endTime, time),
+                hitSample: parseHitSample(parts.slice(1).join(':')),
+            };
+        }
+        if (type & TYPE_CIRCLE) return { kind: 'mania', ...base, hitSample: parseHitSample(p[5]) };
+        console.warn('[parse] unknown mania hit object type', type, row);
+        return null;
+    }
 
     if (type & TYPE_CIRCLE) {
         return { kind: 'circle', ...base, hitSample: parseHitSample(p[5]) };

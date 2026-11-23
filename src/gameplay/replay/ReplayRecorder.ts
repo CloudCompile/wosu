@@ -1,5 +1,5 @@
 import type { GameplayButton } from '../input/GameplayInput';
-import { quantize, type ReplayEvent, type ReplayFrame, type ReplayPress, type ReplayResume } from './Replay';
+import { quantize, type ReplayColumn, type ReplayEvent, type ReplayFrame, type ReplayPress, type ReplayResume } from './Replay';
 
 /**
  * Gameplay ms between frames while only the cursor moves (lazer's
@@ -33,6 +33,13 @@ export class ReplayRecorder {
         const p: ReplayPress = { kind: 'press', time: quantize(time), x: quantize(x), y: quantize(y), button };
         this.events.push(p);
         return p;
+    }
+
+    /** osu!mania: a column's key went down or up. */
+    column(time: number, column: number, down: boolean): ReplayColumn {
+        const e: ReplayColumn = { kind: 'column', time: quantize(time), column, down };
+        this.events.push(e);
+        return e;
     }
 
     resume(time: number): ReplayResume {

@@ -4,18 +4,19 @@
 
 osu! is a rhythm game in which you click circles on the screen, following the rhythm of the music.
 
-wosu! is an unofficial osu!std client that runs entirely in your browser, without any installation! Beatmaps come from mirrors like ([Sayobot](https://osu.sayobot.cn), [Mino](https://catboy.best), [NeriNyan](https://nerinyan.moe)) or you can upload your own `.osz` files.
+wosu! is an unofficial osu!standard and osu!mania client that runs entirely in your browser, without any installation! Beatmaps come from mirrors like ([Sayobot](https://osu.sayobot.cn), [Mino](https://catboy.best), [NeriNyan](https://nerinyan.moe)) or you can upload your own `.osz` files.
 
 wosu! is the successor to [WebOsu 2](https://github.com/WebOsu-2/webosu-2.github.io), itself a continuation of [the original WebOsu](https://github.com/111116/webosu). The classic WebOsu 2 is still online if your device struggles with wosu! or if you just prefer it.
 
-Scoring and judgement follow osu!'s rules closely, but can still differ from official osu!; modes other than osu!std are not supported yet.
+Scoring and judgement follow osu!'s rules closely, but can still differ from official osu!. osu!standard is the main mode; osu!mania (4K, 7K and every other key count) is playable too, with its own judgements, holds, scoring and keys. osu!taiko and osu!catch are not supported yet.
 
 ![wosu! gameplay: YOASOBI - Yoru ni Kakeru (Keirelia's Insane) on Autoplay](screenshots/gameplay.gif)
 
 <sub>YOASOBI - Yoru ni Kakeru [Keirelia's Insane], mapped by [Petal](https://osu.ppy.sh/beatmapsets/1238759) (Autoplay).</sub>
 
 ## Features
-- Base osu!std gameplay loop
+- Base osu!standard gameplay loop
+- osu!mania: keyed notes and holds, 320/300/200/100/50/miss judgements, per-column HUD, autoplay and replays
 - Mods: EZ, NF, HT, DC, HR, SD, PF, DT, NC, HD, FL, RX, AP, SO and Autoplay
 - Download beatmaps in-game, with several default beatmaps and the option to import your own
 - Full HUD with difficulty visualization bars, click counters, and more
@@ -35,6 +36,29 @@ Scoring and judgement follow osu!'s rules closely, but can still differ from off
 | Volume | `Alt` + mouse wheel, `Alt` + `↑`/`↓` |
 
 Gameplay keys can be rebound in Settings → Input.
+
+## osu!mania controls
+
+osu!mania maps use one key per column, laid out like osu!mania's own defaults:
+
+| Keys | Columns |
+| --- | --- |
+| 1K | `Space` |
+| 2K | `F` `J` |
+| 3K | `F` `Space` `J` |
+| 4K | `D` `F` `J` `K` |
+| 5K | `D` `F` `Space` `J` `K` |
+| 6K | `S` `D` `F` `J` `K` `L` |
+| 7K | `S` `D` `F` `Space` `J` `K` `L` |
+| 8K | `A` `S` `D` `F` `J` `K` `L` `;` |
+| 9K | `A` `S` `D` `F` `Space` `J` `K` `L` `;` |
+| 10K | `A` `S` `D` `F` `V` `N` `J` `K` `L` `;` |
+
+Wider maps add the keys `Q W E R U I O P` and the digits. Holds keep their key down until the tail. The per-column key overlay replaces the standard click counters.
+
+Every key count's columns can be rebound in Settings → Input → osu!mania key bindings: click a column's key, press the key you want (`Esc` cancels), and right-click it to put back the default. Binding a key another column of the same layout already uses takes it from that column.
+
+Holds are judged like lazer's: the head is a note judged on the press, and the tail is judged on the release against windows 1.5× the note's, so both count toward the score and combo. Letting go before the tail's window breaks the hold (the combo breaks) and limits its tail to a 50; pressing the column again before the tail picks the hold back up.
 
 ## Development
 

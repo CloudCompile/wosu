@@ -2,7 +2,7 @@ import { Signal } from '../../core/Signal';
 import { difficultyRange } from '../../core/math';
 import type { BreakPeriod, PlayableHitObject } from '../../beatmap/types';
 import { BONUS_SPINS_GAP, DEFAULT_MECHANICS, lazerSpinnerSpins, type GameplayMechanics } from './mechanics';
-import type { HitResult, NestedKind } from './ScoreProcessor';
+import type { HitResult, ManiaJudgement, NestedKind } from './ScoreProcessor';
 
 export interface HealthOptions {
     /** HP drain rate, after mods. */
@@ -27,6 +27,8 @@ export interface HealthOptions {
     od?: number;
     /** Drain per ms, overriding the simulated rate (tests). Without objects it defaults to 0. */
     drainRate?: number;
+    /** osu!mania's health rules (lazer's ManiaHealthProcessor) instead of osu!'s. */
+    mania?: boolean;
 }
 
 /** lazer's OsuHealthProcessor.ComboResult (higher is worse). */
@@ -60,6 +62,15 @@ interface Period { start: number; end: number }
  *    slider head, repeat and end +0.02, tick +0.015, and a missed head,
  *    tick, repeat *or end* costs DifficultyRange(HP, 0.02, 0.075, 0.14);
  *  - no combo bonus; reaching zero health fails at once, drain included.
+ *
+ * mania (lazer's ManiaHealthProcessor : LegacyDrainingHealthProcessor)
+ *  - no passive drain at all: only judgements move health;
+ *  - 320/300/200 give +0.0055 / +0.005 / +0.004 less HP·0.0005 (0.0004 for
+ *    200), 100 gives nothing, 50 costs (HP+1)·0.0016 and a miss
+ *    (HP+1)·0.0075 — halved for a hold's head/tail;
+ *  - gains are scaled by the multiplier from the legacy search, which we
+ *    leave at 1 (see `applyMania`);
+ *  - a miss that empties health fails you, exactly as in lazer.
  */
 export class HealthProcessor {
     hp = 1;
@@ -110,6 +121,12 @@ export class HealthProcessor {
             this.hpMultiplier = r.multiplier;
         } else {
             this.drainRate = o.drainRate ?? (objects.length > 0 ? computeLazerDrain(objects, o.breaks, o.drainStart, hp) : 0);
+            this.hpMultiplier = 1;
+        }
+        if (o.mania) {
+            // lazer's ManiaHealthProcessor computes the base (legacy) rate for
+            // the gain multiplier only, then drains nothing.
+            this.drainRate = 0;
             this.hpMultiplier = 1;
         }
     }
@@ -179,6 +196,29 @@ export class HealthProcessor {
     /** A spinner spin (SmallBonus) or bonus spin (LargeBonus). Bonus results never fail you. */
     applySpin(bonus = false): void {
         this.change((bonus ? 0.01 : 0.0085) * this.hpMultiplier, false);
+    }
+
+    /**
+     * osu!mania's judgement health (lazer's ManiaHealthProcessor). A hold's
+     * head and tail are judged separately, each charging lazer's halved
+     * hold penalty on a miss (so a hold missed outright costs one note's
+     * worth in total).
+     *
+     * lazer scales the gains by the multiplier the legacy search settles on.
+     * That search assumes osu!'s flat +0.03 per object, which mania maps
+     * don't have, so the multiplier is left at 1 — apart from long chains of
+     * misses the practical difference is nil, since health caps at full.
+     */
+    applyMania(result: ManiaJudgement, isHold = false): void {
+        const hp = this.o.hpDifficulty;
+        switch (result) {
+            case 'perfect': return this.change(0.0055 - hp * 0.0005);
+            case 'great': return this.change(0.005 - hp * 0.0005);
+            case 'good': return this.change(0.004 - hp * 0.0004);
+            case 'ok': return this.change(0);
+            case 'meh': return this.change(-(hp + 1) * 0.0016);
+            case 'miss': return this.change(-(hp + 1) * (isHold ? 0.00375 : 0.0075));
+        }
     }
 
     /** Force a failure (Sudden Death / Perfect). */

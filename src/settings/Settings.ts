@@ -4,6 +4,7 @@ import { isModAcronym, sanitizeMods, sortedMods, type ModAcronym } from '../game
 import type { ProviderId } from '../online/providers';
 import { DEFAULT_MECHANICS, type GameplayMechanics } from '../gameplay/scoring/mechanics';
 import { SENSITIVITY_MAX, SENSITIVITY_MIN } from '../input/RelativePointer';
+import { sanitizeManiaKeys } from '../gameplay/mania/layout';
 import { DEFAULT_WOSU_SKIN, sanitizeWosuSkin, type WosuSkinOptions } from '../skin/wosu/options';
 
 export type SongSort = 'title' | 'artist' | 'creator' | 'difficulty' | 'length' | 'bpm' | 'dateAdded' | 'lastPlayed';
@@ -126,6 +127,8 @@ export class GameSettings {
     readonly confineMouse = new Bindable<ConfineMouseMode>('never');
     /** Changed global action bindings only (`{ action: ["Ctrl+KeyO", …] }`; see input/bindings resolveBindings). */
     readonly keyBindings = new Bindable<Readonly<Record<string, readonly string[]>>>({});
+    /** Custom osu!mania column keys, per key count (`{ "4": ["KeyD", "KeyF", "KeyJ", "KeyK"] }`). */
+    readonly maniaKeys = new Bindable<Readonly<Record<string, readonly string[]>>>({});
 
     // Skin / cursor (defaults and ranges are lazer's)
     /** Selected imported skin's id ('' = wosu!'s default skin); lazer's OsuSetting.Skin. */
@@ -218,6 +221,8 @@ export class GameSettings {
                 b.value = sanitizeWosuSkin(v);
             } else if (key === 'selectedMods') {
                 if (Array.isArray(v)) b.value = sortedMods(sanitizeMods(v.filter(isModAcronym)));
+            } else if (key === 'maniaKeys') {
+                b.value = sanitizeManiaKeys(v);
             } else if (typeof def === 'number') {
                 const n = Number(v);
                 if (Number.isFinite(n)) b.value = n;

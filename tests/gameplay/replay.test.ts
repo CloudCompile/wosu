@@ -146,9 +146,17 @@ describe('replay encoding', () => {
             { kind: 'frame', time: quantize(99.9), x: 0, y: 0, buttons: 15 },
             { kind: 'resume', time: quantize(5e6) },
             { kind: 'press', time: quantize(5e6 + 1), x: quantize(-700.06), y: 1, button: 'K1' },
+            // osu!mania's column presses (version 2).
+            { kind: 'column', time: quantize(1200.4), column: 0, down: true },
+            { kind: 'column', time: quantize(1300), column: 17, down: false },
         ];
         expect(decodeReplay(encodeReplay(events))).toEqual(events);
         expect(decodeReplay(encodeReplay([]))).toEqual([]);
+    });
+
+    it('rejects a column outside the mania range', () => {
+        const rec = new ReplayRecorder();
+        expect(rec.column(0.0625, 3, true)).toEqual({ kind: 'column', time: 0.0625, column: 3, down: true });
     });
 
     it('stays compact: a few bytes per frame, even for this very shaky cursor', () => {

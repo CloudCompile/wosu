@@ -41,6 +41,10 @@ export interface HUDState {
     stats?: LiveScoreStats;
     /** Every hit's timing error so far, in song ms (unstable rate). */
     hitErrors?: readonly number[];
+    /** osu!mania: per-column held state, press counts and key labels (the key overlay). */
+    columns?: { down: readonly boolean[]; counts: readonly number[]; labels: readonly string[] };
+    /** osu!mania's six judgement tiers (the judgement counter). */
+    maniaCounts?: { 320: number; 300: number; 200: number; 100: number; 50: number; miss: number };
 }
 
 export interface HUDOptions {
@@ -69,6 +73,8 @@ export interface HUDOptions {
     beatmapInfo?: BeatmapInfo | (() => BeatmapInfo);
     /** The skin editor's preview: always shown, with hidden components drawn faintly. */
     editor?: boolean;
+    /** osu!mania: no standard pp estimate exists, so the live pp counter stays blank. */
+    mania?: boolean;
 }
 
 /** lazer's HUDOverlay.FADE_DURATION / FADE_EASING. */

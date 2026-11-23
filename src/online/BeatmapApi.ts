@@ -90,9 +90,9 @@ interface Shared<T> {
     waiters: number;
 }
 
-/** osu!standard difficulties sorted by stars. */
+/** Playable (osu!standard or osu!mania) difficulties sorted by stars. */
 export function standardDifficulties(diffs: readonly OnlineDifficulty[]): OnlineDifficulty[] {
-    return diffs.filter(d => d.mode === 0).sort((a, b) => a.stars - b.stars);
+    return diffs.filter(d => d.mode === 0 || d.mode === 3).sort((a, b) => a.stars - b.stars);
 }
 
 export class BeatmapApi {

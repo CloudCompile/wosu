@@ -130,7 +130,7 @@ describe('BeatmapLibrary', () => {
         const { lib } = newLibrary();
         await expect(lib.importOsz(new Blob(['not a zip']))).rejects.toThrow(/valid .osz/);
         await expect(lib.importOsz(osz({ 'readme.txt': 'hi' }))).rejects.toThrow(/No .osu files/);
-        await expect(lib.importOsz(osz({ 't.osu': withHeader(FIXTURE, 'Mode', ' 3') }))).rejects.toThrow(/osu!standard/);
+        await expect(lib.importOsz(osz({ 't.osu': withHeader(FIXTURE, 'Mode', ' 1') }))).rejects.toThrow(/playable difficulties/);
         expect(lib.sets).toHaveLength(0);
     });
 

@@ -22,6 +22,9 @@ export interface ScoreResult {
     count100: number;
     count50: number;
     countMiss: number;
+    /** osu!mania's extra tiers (absent for standard scores). */
+    count320?: number;
+    count200?: number;
     /** osu!stable's combo-end judgements (see scoring/comboEnd): gekis, and katus (hit300k + hit100k). */
     countGeki: number;
     countKatu: number;

@@ -9,6 +9,7 @@ import { NO_MODS } from '../gameplay/mods';
 import { buildControlPointTimeline } from './controlPoints';
 import { createSliderPath } from './curves';
 import { calculateDifficulty } from './difficulty';
+import { calculateManiaStars } from './mania';
 import { buildPlayableBeatmap, countSliderTicks, sliderTiming } from './processing';
 import type { BeatmapData, DifficultySummary } from './types';
 
@@ -26,7 +27,14 @@ export function summarizeDifficulty(data: BeatmapData, file: string): Difficulty
     for (const o of objects) {
         if (o.time < firstTime) firstTime = o.time;
         let end = o.time;
-        if (o.kind === 'circle') {
+        if (o.kind === 'mania') {
+            // Mania taps / holds (holds take the slider count so the info
+            // card still shows one number per kind).
+            if (o.isHold) sliders++;
+            else circles++;
+            maxCombo++;
+            end = Math.max(o.endTime ?? o.time, o.time);
+        } else if (o.kind === 'circle') {
             circles++;
             maxCombo++;
         } else if (o.kind === 'spinner') {
@@ -78,8 +86,12 @@ export function summarizeDifficulty(data: BeatmapData, file: string): Difficulty
 
 /** Offline estimate; a mirror's official rating replaces it when available. */
 function localStars(data: BeatmapData): Pick<DifficultySummary, 'stars' | 'starSource'> {
-    if (data.general.mode !== 0 || data.hitObjects.length === 0) return { stars: null };
+    if (data.hitObjects.length === 0) return { stars: null };
     try {
+        if (data.general.mode === 3) {
+            return { stars: calculateManiaStars(data), starSource: 'local' };
+        }
+        if (data.general.mode !== 0) return { stars: null };
         return { stars: calculateDifficulty(buildPlayableBeatmap(data, NO_MODS)).stars, starSource: 'local' };
     } catch (e) {
         console.warn('star rating failed', e);

@@ -39,7 +39,7 @@ export interface OnlineSet {
     creator: string;
     /** Ranked status: 4 loved, 3 qualified, 2 approved, 1 ranked, 0 pending, -1 WIP, -2 graveyard. */
     approved: number;
-    /** Bitmask of game modes present; bit 0 = osu!standard. */
+    /** Bitmask of game modes present; bit 0 = osu!standard, bit 3 = osu!mania. */
     modes: number;
     video: boolean;
     playCount: number;
@@ -167,7 +167,8 @@ export function minoLangIds(mask: number | null | undefined): number[] | null {
     }
 }
 
-export const isStandardSet = (s: OnlineSet): boolean => (s.modes & 1) !== 0;
+/** A set with a difficulty this client can play (osu!standard or osu!mania). */
+export const isStandardSet = (s: OnlineSet): boolean => (s.modes & ((1 << 0) | (1 << 3))) !== 0;
 
 /** Ranked-status predicate for list filters ('any' = no filter). */
 export function statusFilter(code: string | number | null | undefined): ((s: OnlineSet) => boolean) | null {
@@ -369,7 +370,9 @@ const mino: Provider = {
         // order in the API); random jumps to a random page.
         const fetchSize = o.kind === 'popular' ? 100 : o.limit;
         const page = o.kind === 'random' ? Math.floor(Math.random() * 50) : Math.floor(o.offset / fetchSize);
-        let url = `https://catboy.best/api/v2/search?limit=${fetchSize}&p=${page}&mode=0`;
+        // No mode filter: osu!standard and osu!mania sets are both playable
+        // (taiko/catch ones are dropped client-side, see isStandardSet).
+        let url = `https://catboy.best/api/v2/search?limit=${fetchSize}&p=${page}`;
         if (o.kind === 'search') url += '&query=' + encodeURIComponent(o.keyword);
         return { url, fetchSize };
     },

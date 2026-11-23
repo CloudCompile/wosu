@@ -164,21 +164,36 @@ export class ScorePanel extends UIComponent {
             // lazer's third top statistic. wosu!'s estimate of the osu! formula; "-" when unknown.
             { title: 'PP', value: r.pp ?? 0, format: v => (r.pp == null ? '-' : formatNumber(Math.round(v))), color: Colors.grayC },
         ], GRID_Y, 0);
-        this.grid([
-            { title: 'GREAT', value: r.count300, format: int, color: Colors.great },
-            { title: 'OK', value: r.count100, format: int, color: Colors.ok },
-            { title: 'MEH', value: r.count50, format: int, color: Colors.meh },
-            { title: 'MISS', value: r.countMiss, format: int, color: Colors.miss },
-        ], GRID_Y + ROW_H, 1);
-        const endsTotal = r.sliderEndsTotal;
-        this.grid([
-            { title: 'SLIDER TICKS', value: r.sliderTicksHit, format: v => `${int(v)}/${int(r.sliderTicksTotal)}`, color: Colors.grayC },
-            // lazer mechanics: its "Slider End" statistic (tails count toward accuracy there).
-            ...(endsTotal !== undefined
-                ? [{ title: 'SLIDER ENDS', value: r.sliderEndsHit ?? 0, format: (v: number) => `${int(v)}/${int(endsTotal)}`, color: Colors.grayC }]
-                : []),
-            { title: 'UNSTABLE RATE', value: r.unstableRate, format: v => v.toFixed(2), color: Colors.grayC, integer: false },
-        ], GRID_Y + ROW_H * 2, 2);
+        if (r.count320 !== undefined) {
+            // osu!mania: its six judgement tiers replace standard's four.
+            this.grid([
+                { title: '320', value: r.count320, format: int, color: 0x66ccff },
+                { title: '300', value: r.count300, format: int, color: 0xffcc22 },
+                { title: '200', value: r.count200 ?? 0, format: int, color: 0x66ff66 },
+                { title: '100', value: r.count100, format: int, color: 0x00ccff },
+            ], GRID_Y + ROW_H, 1);
+            this.grid([
+                { title: '50', value: r.count50, format: int, color: 0xffcc00 },
+                { title: 'MISS', value: r.countMiss, format: int, color: Colors.miss },
+                { title: 'UNSTABLE RATE', value: r.unstableRate, format: v => v.toFixed(2), color: Colors.grayC, integer: false },
+            ], GRID_Y + ROW_H * 2, 2);
+        } else {
+            this.grid([
+                { title: 'GREAT', value: r.count300, format: int, color: Colors.great },
+                { title: 'OK', value: r.count100, format: int, color: Colors.ok },
+                { title: 'MEH', value: r.count50, format: int, color: Colors.meh },
+                { title: 'MISS', value: r.countMiss, format: int, color: Colors.miss },
+            ], GRID_Y + ROW_H, 1);
+            const endsTotal = r.sliderEndsTotal;
+            this.grid([
+                { title: 'SLIDER TICKS', value: r.sliderTicksHit, format: v => `${int(v)}/${int(r.sliderTicksTotal)}`, color: Colors.grayC },
+                // lazer mechanics: its "Slider End" statistic (tails count toward accuracy there).
+                ...(endsTotal !== undefined
+                    ? [{ title: 'SLIDER ENDS', value: r.sliderEndsHit ?? 0, format: (v: number) => `${int(v)}/${int(endsTotal)}`, color: Colors.grayC }]
+                    : []),
+                { title: 'UNSTABLE RATE', value: r.unstableRate, format: v => v.toFixed(2), color: Colors.grayC, integer: false },
+            ], GRID_Y + ROW_H * 2, 2);
+        }
 
         // --- footer ----------------------------------------------------------
         const footer = new Container();

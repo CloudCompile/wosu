@@ -153,6 +153,13 @@ class KeyElement extends HudElement<KeyOverlay> {
     override allowed(): boolean { return this.env.settings.keyOverlay.value; }
     override applySettings(): void { this.view.setStyle(this.env.settings.keyOverlayStyle.value); }
     override update(dt: number, s: HUDState): void {
+        const c = s.columns;
+        if (c && this.view.setColumns && this.view.updateColumns) {
+            // osu!mania: one counter per column, labelled with its key.
+            this.view.setColumns(c.labels);
+            if (this.slot.visible) this.view.updateColumns(dt, c.down, c.counts);
+            return;
+        }
         if (this.slot.visible) this.view.update(dt, s.down, s.counts);
     }
 }
@@ -185,7 +192,8 @@ class PerformanceElement extends HudElement<PerformancePointsCounter> {
     override box(): Rect { return this.view.box; }
     override update(dt: number, s: HUDState): void {
         const st = s.stats;
-        if (st) {
+        // osu!mania has no pp model here; the counter stays blank.
+        if (st && !this.env.opts.mania) {
             const key = `${st.great}|${st.ok}|${st.meh}|${st.miss}|${st.maxCombo}|${st.accuracy}|${st.sliderEndsHit}|${st.sliderEndsJudged}|${st.tickMisses}`;
             if (key !== this.key) {
                 this.key = key;
@@ -199,8 +207,9 @@ class PerformanceElement extends HudElement<PerformancePointsCounter> {
 class JudgementElement extends HudElement<JudgementCounter> {
     override box(): Rect { return this.view.box; }
     override update(_dt: number, s: HUDState): void {
-        const st = s.stats;
-        if (st) this.view.set(st.great, st.ok, st.meh, st.miss);
+        // osu!mania keeps its six tiers (320 … miss), not standard's four.
+        if (s.maniaCounts) this.view.setMania(s.maniaCounts);
+        else if (s.stats) this.view.set(s.stats.great, s.stats.ok, s.stats.meh, s.stats.miss);
     }
 }
 
@@ -243,7 +252,7 @@ export function createHudElement(id: string, type: HudComponentType, env: HudEnv
             env.performance();
             return new PerformanceElement(id, type, new PerformancePointsCounter(), env);
         }
-        case 'judgementCounter': return new JudgementElement(id, type, new JudgementCounter(), env);
+        case 'judgementCounter': return new JudgementElement(id, type, new JudgementCounter(env.opts.mania), env);
         case 'modDisplay': return new ModDisplayElement(id, type, new ModDisplay(chain, opts.mods ?? NO_MODS, !!opts.editor), env);
     }
 }

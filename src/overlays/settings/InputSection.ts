@@ -5,6 +5,7 @@ import type { UIComponent } from '../../ui/UIComponent';
 import { checkboxRow, dropdownRow, keyBindRow, sliderRow } from './rows';
 import type { SectionDef } from './types';
 import { actionBindingSubsections } from './ActionBindings';
+import { maniaBindingSubsections } from './ManiaBindings';
 
 /** lazer's `{v:0.##}x`. */
 const sensitivity = (v: number): string => `${Number(v.toFixed(2))}x`;
@@ -61,6 +62,8 @@ export function inputSection(game: Game): SectionDef {
                     checkboxRow('Mouse wheel changes volume in gameplay', s.wheelVolumeInGameplay, { keywords: 'scroll' }),
                 ],
             },
+            // osu!mania's one key per column, per key count (lazer's mania section).
+            ...maniaBindingSubsections(game),
             // lazer's global action bindings (song select, in game, replay…), each rebindable.
             ...actionBindingSubsections(game),
         ],

@@ -78,6 +78,10 @@ class KeyTracker {
 export interface KeyOverlay extends Container {
     setStyle(style: KeyOverlayStyle): void;
     update(dt: number, down: Record<GameplayButton, boolean>, counts: Record<GameplayButton, number>): void;
+    /** osu!mania: switch to one counter per column, labelled with the column's key. */
+    setColumns?(labels: readonly string[]): void;
+    /** osu!mania: per-column held state and press counts. */
+    updateColumns?(dt: number, down: readonly boolean[], counts: readonly number[]): void;
     /** Place the overlay for a w×h screen; `unit` is the HUD's own scale, `legacyUnit` lazer's 1024×768 one. */
     place(w: number, h: number, unit: number, legacyUnit: number): void;
     /** Its box in its own units (for the layout editor). */
@@ -103,6 +107,8 @@ export class KeyCounter extends Container implements KeyOverlay {
     private keys: Key[] = [];
     private tracker!: KeyTracker;
     private style: KeyOverlayStyle | null = null;
+    /** osu!mania's per-column labels (null: the standard button layout). */
+    private columnLabels: readonly string[] | null = null;
 
     constructor(style: KeyOverlayStyle = 'lazer') {
         super();
@@ -111,21 +117,32 @@ export class KeyCounter extends Container implements KeyOverlay {
     }
 
     setStyle(style: KeyOverlayStyle): void {
-        if (style === this.style) return;
+        if (style === this.style && !this.columnLabels) return;
         this.style = style;
+        this.columnLabels = null;
         for (const c of this.removeChildren()) c.destroy({ children: true });
         this.tracker = new KeyTracker(LAYOUTS[style]);
-        this.keys = LAYOUTS[style].map((def, i) => {
-            const box = new Graphics();
-            const label = counterText(def.name, { size: 14 });
-            label.anchor.set(0.5);
-            const c = new Container();
-            c.y = i * (SIZE + GAP);
-            label.position.set(SIZE / 2, SIZE / 2);
-            c.addChild(box, label);
-            this.addChild(c);
-            return { box, label, color: def.color, name: def.name, lit: 0, shown: -1, dirty: true };
-        });
+        this.keys = LAYOUTS[style].map((def, i) => this.makeKey(def.name, def.color, i));
+    }
+
+    /** osu!mania: one counter per column (keyboard style, labelled by key). */
+    setColumns(labels: readonly string[]): void {
+        if (this.columnLabels && this.columnLabels.length === labels.length && this.columnLabels.every((l, i) => l === labels[i])) return;
+        this.columnLabels = labels;
+        for (const c of this.removeChildren()) c.destroy({ children: true });
+        this.keys = labels.map((name, i) => this.makeKey(name, KEY_COLOR, i));
+    }
+
+    private makeKey(name: string, color: number, i: number): Key {
+        const box = new Graphics();
+        const label = counterText(name, { size: 14 });
+        label.anchor.set(0.5);
+        const c = new Container();
+        c.y = i * (SIZE + GAP);
+        label.position.set(SIZE / 2, SIZE / 2);
+        c.addChild(box, label);
+        this.addChild(c);
+        return { box, label, color, name, lit: 0, shown: -1, dirty: true };
     }
 
     get stackHeight(): number {
@@ -144,27 +161,32 @@ export class KeyCounter extends Container implements KeyOverlay {
 
     update(dt: number, down: Record<GameplayButton, boolean>, counts: Record<GameplayButton, number>): void {
         this.tracker.update(down, counts);
-        this.keys.forEach((k, i) => {
-            const count = this.tracker.counts[i];
-            const target = this.tracker.isDown(i, down) ? 1 : 0;
-            const lit = target > k.lit ? target : damp(k.lit, target, 40, dt);
-            const changed = k.dirty || Math.abs(lit - k.lit) > 0.005 || k.shown !== count;
-            k.lit = lit;
-            k.dirty = false;
-            if (k.shown !== count) {
-                k.shown = count;
-                k.label.text = count > 0 ? String(count) : k.name;
-            }
-            if (!changed) return;
-            const scale = 1 - 0.08 * lit;
-            const inset = (SIZE * (1 - scale)) / 2;
-            k.box.clear()
-                .roundRect(inset, inset, SIZE * scale, SIZE * scale, 6)
-                .fill({ color: lit > 0.01 ? k.color : 0x000000, alpha: 0.35 + 0.5 * lit })
-                .roundRect(inset, inset, SIZE * scale, SIZE * scale, 6)
-                .stroke({ width: 2, color: 0xffffff, alpha: 0.6 + 0.4 * lit });
-            k.label.tint = lit > 0.5 ? 0x000000 : 0xffffff;
-        });
+        this.keys.forEach((k, i) => this.apply(k, dt, this.tracker.counts[i], this.tracker.isDown(i, down)));
+    }
+
+    updateColumns(dt: number, down: readonly boolean[], counts: readonly number[]): void {
+        this.keys.forEach((k, i) => this.apply(k, dt, counts[i] ?? 0, !!down[i]));
+    }
+
+    private apply(k: Key, dt: number, count: number, isDown: boolean): void {
+        const target = isDown ? 1 : 0;
+        const lit = target > k.lit ? target : damp(k.lit, target, 40, dt);
+        const changed = k.dirty || Math.abs(lit - k.lit) > 0.005 || k.shown !== count;
+        k.lit = lit;
+        k.dirty = false;
+        if (k.shown !== count) {
+            k.shown = count;
+            k.label.text = count > 0 ? String(count) : k.name;
+        }
+        if (!changed) return;
+        const scale = 1 - 0.08 * lit;
+        const inset = (SIZE * (1 - scale)) / 2;
+        k.box.clear()
+            .roundRect(inset, inset, SIZE * scale, SIZE * scale, 6)
+            .fill({ color: lit > 0.01 ? k.color : 0x000000, alpha: 0.35 + 0.5 * lit })
+            .roundRect(inset, inset, SIZE * scale, SIZE * scale, 6)
+            .stroke({ width: 2, color: 0xffffff, alpha: 0.6 + 0.4 * lit });
+        k.label.tint = lit > 0.5 ? 0x000000 : 0xffffff;
     }
 }
 

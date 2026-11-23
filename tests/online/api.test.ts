@@ -143,8 +143,9 @@ describe('helpers', () => {
         expect(c.size).toBe(2);
     });
 
-    it('standardDifficulties keeps osu! mode sorted by stars', () => {
+    it('standardDifficulties keeps playable modes sorted by stars', () => {
         const d = (bid: number, mode: number, stars: number) => ({ bid, mode, stars, version: '', creator: '', length: 0, bpm: 0 });
-        expect(standardDifficulties([d(1, 0, 5), d(2, 3, 1), d(3, 0, 2)]).map(x => x.bid)).toEqual([3, 1]);
+        // osu!standard and osu!mania; taiko/catch are not playable here.
+        expect(standardDifficulties([d(1, 0, 5), d(2, 3, 1), d(3, 0, 2), d(4, 1, 9)]).map(x => x.bid)).toEqual([2, 3, 1]);
     });
 });

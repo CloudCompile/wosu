@@ -8,6 +8,19 @@ export type HitResult = 'great' | 'ok' | 'meh' | 'miss';
 /** Judged parts of a slider (lazer's nested objects). */
 export type NestedKind = 'head' | 'tick' | 'repeat' | 'tail';
 
+/** osu!mania judgements (lazer's ManiaHitResult): 320 / 300 / 200 / 100 / 50 / miss. */
+export type ManiaJudgement = 'perfect' | 'great' | 'good' | 'ok' | 'meh' | 'miss';
+export const MANIA_RESULT_VALUE: Record<ManiaJudgement, number> = { perfect: 320, great: 300, good: 200, ok: 100, meh: 50, miss: 0 };
+/** The standard result each mania judgement stands in for in shared visuals. */
+export const MANIA_AS_HIT_RESULT: Record<ManiaJudgement, HitResult> = {
+    perfect: 'great', great: 'great', good: 'ok', ok: 'ok', meh: 'meh', miss: 'miss',
+};
+/** osu!mania's judgement labels. */
+export const MANIA_LABEL: Record<ManiaJudgement, string> = {
+    perfect: '320', great: '300', good: '200', ok: '100', meh: '50', miss: 'MISS',
+};
+export const MANIA_JUDGEMENTS: readonly ManiaJudgement[] = ['perfect', 'great', 'good', 'ok', 'meh', 'miss'];
+
 export const RESULT_VALUE: Record<HitResult, number> = { great: 300, ok: 100, meh: 50, miss: 0 };
 
 export interface ScoreOptions {
@@ -226,5 +239,19 @@ export function resultForError(error: number, w300: number, w100: number, w50: n
     if (e <= w300) return 'great';
     if (e <= w100) return 'ok';
     if (e <= w50) return 'meh';
+    return null;
+}
+
+/** osu!mania's judgement for a hit `error` ms off a note (null: outside every window). */
+export function maniaResultForError(
+    error: number,
+    w: { windowPerfect: number; windowGreat: number; windowGood: number; windowOk: number; windowMeh: number },
+): ManiaJudgement | null {
+    const e = Math.abs(error);
+    if (e <= w.windowPerfect) return 'perfect';
+    if (e <= w.windowGreat) return 'great';
+    if (e <= w.windowGood) return 'good';
+    if (e <= w.windowOk) return 'ok';
+    if (e <= w.windowMeh) return 'meh';
     return null;
 }

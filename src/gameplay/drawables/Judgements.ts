@@ -24,6 +24,10 @@ const TICK_HIT_LIFETIME = 360;
 
 const TEXT: Record<HitResult, string> = { great: 'GREAT', ok: 'OK', meh: 'MEH', miss: 'MISS' };
 const COLOR: Record<HitResult, number> = { great: Colors.great, ok: Colors.ok, meh: Colors.meh, miss: Colors.miss };
+/** osu!mania's judgement labels and their colours (lazer's ManiaJudgement). */
+const MANIA_COLOR: Record<string, number> = {
+    '320': 0x66ccff, '300': 0xffcc22, '200': 0x66ff66, '100': 0x00ccff, '50': 0xffcc00, MISS: Colors.miss,
+};
 const IMAGE: Record<HitResult, string> = { great: 'hit300', ok: 'hit100', meh: 'hit50', miss: 'hit0' };
 const PARTICLE: Record<HitResult, string | null> = { great: 'particle300', ok: 'particle100', meh: 'particle50', miss: null };
 
@@ -231,17 +235,24 @@ export class Judgements extends Container {
         return null;
     }
 
-    /** A main judgement; `variant`: stable's geki / katu for a combo's last object (shown when the skin has the image). */
-    add(result: HitResult, x: number, y: number, time: number, color: number, variant: ComboEndVariant | null = null): void {
+    /**
+     * A main judgement; `variant`: stable's geki / katu for a combo's last
+     * object (shown when the skin has the image). `label` replaces the
+     * skin art with plain text of that label (osu!mania's 320/200/…).
+     */
+    add(result: HitResult, x: number, y: number, time: number, color: number, variant: ComboEndVariant | null = null, label?: string): void {
         if (result !== 'miss' && this.hitLighting && this.lighting) this.addLight(x, y, time, color);
-        if (result === 'great' && this.hideGreat) return;
-        const end = comboEndKind(result, variant);
-        if (end && this.addPiece(end, x, y, time)) return;
-        if (this.addPiece(result, x, y, time)) return;
+        if (label === undefined && result === 'great' && this.hideGreat) return;
+        if (label === '300' && this.hideGreat) return;
+        if (label === undefined) {
+            const end = comboEndKind(result, variant);
+            if (end && this.addPiece(end, x, y, time)) return;
+            if (this.addPiece(result, x, y, time)) return;
+        }
         const text = this.free.pop() ?? this.makeText();
         text.visible = true;
-        text.text = TEXT[result];
-        text.tint = COLOR[result];
+        text.text = label ?? TEXT[result];
+        text.tint = label === undefined ? COLOR[result] : MANIA_COLOR[label] ?? Colors.great;
         this.active.push({ text, result, x, y, time, spin: Math.random() < 0.5 ? -1 : 1 });
     }
 

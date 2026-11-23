@@ -129,7 +129,7 @@ describe('mino', () => {
     it('pages popular from 100-row batches', () => {
         const u = m.listUrl(req({ kind: 'popular', offset: 120 }));
         expect(u.fetchSize).toBe(100);
-        expect(u.url).toBe('https://catboy.best/api/v2/search?limit=100&p=1&mode=0');
+        expect(u.url).toBe('https://catboy.best/api/v2/search?limit=100&p=1');
         const rows = Array.from({ length: 100 }, (_, i) => v2set({ id: i + 1, play_count: 1000 - i }));
         // offset 120 within the 100-row page starting at 100 -> rows 20..39
         expect(m.normalizeList(rows, req({ kind: 'popular', offset: 120, fetchSize: 100 })).map(s => s.sid)[0]).toBe(21);

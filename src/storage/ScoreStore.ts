@@ -34,6 +34,9 @@ export interface ScoreRecord {
     count100: number;
     count50: number;
     countMiss: number;
+    /** osu!mania's extra tiers (absent on standard scores). */
+    count320?: number;
+    count200?: number;
     /** osu!stable's gekis and katus (absent on scores set before they were counted). */
     countGeki?: number;
     countKatu?: number;

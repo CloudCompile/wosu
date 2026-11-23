@@ -1,4 +1,4 @@
-import type { CursorState, GameplayRules } from './GameplayRules';
+import type { CursorState, JudgementRules } from './GameplayRules';
 import type { AutoPlayer } from './input/AutoPlayer';
 import type { InputMode } from './mods';
 import { PRESS_BITS, type ReplayEvent } from './replay/Replay';
@@ -12,10 +12,11 @@ const SUBSTEP_MS = 8;
 const MAX_SUBSTEPS = 40;
 
 /**
- * Feeds GameplayRules the way the Player does: input frames (sub-stepped),
+ * Feeds judgement the way the Player does: input frames (sub-stepped),
  * presses (through the input mode's rules: Autoplay and Relax ignore
- * them, Autopilot aims for you) and resumes. Live play and replays both
- * go through here, so the same input sequence judges the same way.
+ * them, Autopilot aims for you), osu!mania's column presses and resumes.
+ * Live play and replays both go through here, so the same input sequence
+ * judges the same way.
  */
 export class RulesDriver {
     /** Called before every judgement step (Autoplay feeds its presses here). */
@@ -24,7 +25,7 @@ export class RulesDriver {
     private prev: CursorState = { x: 256, y: 192, held: false };
 
     constructor(
-        private readonly rules: GameplayRules,
+        private readonly rules: JudgementRules,
         private readonly mode: InputMode,
         /** Autoplay / Autopilot's cursor path. */
         private readonly auto: AutoPlayer | null = null,
@@ -69,6 +70,13 @@ export class RulesDriver {
         }
     }
 
+    /** osu!mania: a column's key went down / up (Autoplay ignores the user's). */
+    column(time: number, column: number, down: boolean): void {
+        if (this.mode === 'autoplay') return;
+        if (down) this.rules.pressColumn?.(time, column);
+        else this.rules.releaseColumn?.(time, column);
+    }
+
     /** Gameplay resumed after a pause. */
     resume(): void {
         this.rules.resetSpinnerTracking();
@@ -77,6 +85,7 @@ export class RulesDriver {
     apply(e: ReplayEvent): void {
         if (e.kind === 'frame') this.step(e.time, { x: e.x, y: e.y, held: (e.buttons & PRESS_BITS) !== 0 });
         else if (e.kind === 'press') this.press(e.time, e.x, e.y);
+        else if (e.kind === 'column') this.column(e.time, e.column, e.down);
         else this.resume();
     }
 }

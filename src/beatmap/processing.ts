@@ -343,6 +343,7 @@ export function playableOptions(mechanics: GameplayMechanics): PlayableOptions {
 }
 
 export function buildPlayableBeatmap(data: BeatmapData, mods: ModSet, options: PlayableOptions = {}): PlayableBeatmap {
+    if (data.general.mode === 3) throw new Error('osu!mania difficulties use buildManiaBeatmap');
     const raw = data.difficulty;
     const adjusted = adjustDifficulty(
         { cs: raw.circleSize, ar: raw.approachRate, od: raw.overallDifficulty, hp: raw.hpDrainRate },

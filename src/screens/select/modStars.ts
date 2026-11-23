@@ -1,6 +1,7 @@
 import type { Game } from '../../app/Game';
 import type { LibrarySet } from '../../beatmap/Library';
 import { calculateDifficulty } from '../../beatmap/difficulty';
+import { calculateManiaStars } from '../../beatmap/mania';
 import { buildPlayableBeatmap } from '../../beatmap/processing';
 import type { DifficultySummary } from '../../beatmap/types';
 import { NO_MODS, modsKey, playbackRate, withSettings, type ModSet } from '../../gameplay/mods';
@@ -33,8 +34,12 @@ export function modAdjustedStars(game: Game, set: LibrarySet, diff: DifficultySu
     let hit = cache.get(key);
     if (!hit) {
         hit = game.library.loadBeatmap(set.key, diff.file).then(data => {
-            const base = calculateDifficulty(buildPlayableBeatmap(data, NO_MODS)).stars;
-            const modded = calculateDifficulty(buildPlayableBeatmap(data, relevant), playbackRate(relevant)).stars;
+            // osu!mania has its own local estimate (the standard calculator only handles mode 0).
+            const mania = data.general.mode === 3;
+            const base = mania ? calculateManiaStars(data, NO_MODS) : calculateDifficulty(buildPlayableBeatmap(data, NO_MODS)).stars;
+            const modded = mania
+                ? calculateManiaStars(data, relevant)
+                : calculateDifficulty(buildPlayableBeatmap(data, relevant), playbackRate(relevant)).stars;
             if (!(base > 0)) return diff.stars;
             return Math.round((diff.stars as number) * (modded / base) * 100) / 100;
         }).catch(() => diff.stars);

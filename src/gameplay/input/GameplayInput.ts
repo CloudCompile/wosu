@@ -37,11 +37,18 @@ export class GameplayInput {
     /** A button went down: song time, logical position, button. */
     readonly pressed = new Signal<[time: number, x: number, y: number, button: GameplayButton]>();
     readonly released = new Signal<[button: GameplayButton]>();
+    /** osu!mania: a column's key went down / up, at its event's song time. */
+    readonly columnPressed = new Signal<[time: number, column: number]>();
+    readonly columnReleased = new Signal<[time: number, column: number]>();
     /** Any press, even while judgement input is disabled (resume overlay). */
     readonly anyPress = new Signal<[x: number, y: number]>();
     /** Presses per button (key overlay). */
     readonly counts: Record<GameplayButton, number> = { K1: 0, K2: 0, M1: 0, M2: 0 };
     readonly down: Record<GameplayButton, boolean> = { K1: false, K2: false, M1: false, M2: false };
+    /** osu!mania's per-column keys (KeyboardEvent.code), held state and press counts. */
+    columnKeys: readonly string[] = [];
+    columnDown: boolean[] = [];
+    columnCounts: number[] = [];
     /**
      * The smoke key is held (lazer's OsuAction.Smoke). Not a gameplay button:
      * it never judges, and like lazer's it works while presses are disabled.
@@ -94,8 +101,20 @@ export class GameplayInput {
         this.listeners.push([type, fn]);
     }
 
+    /** Set the osu!mania column keys (code per column) and reset their state. */
+    setColumnKeys(keys: readonly string[]): void {
+        this.columnKeys = keys;
+        this.columnDown = new Array(keys.length).fill(false);
+        this.columnCounts = new Array(keys.length).fill(0);
+    }
+
     /** Keyboard down (from the screen's key routing). Returns true if it was a gameplay key. */
     keyDown(e: KeyboardEvent): boolean {
+        const column = this.columnKeys.indexOf(e.code);
+        if (column >= 0) {
+            if (!e.repeat && !this.columnDown[column]) this.pressColumn(column, e);
+            return true;
+        }
         const button = this.keyButton(e.code);
         if (!button) {
             if (e.code !== this.settings.keySmoke.value) return false;
@@ -107,9 +126,35 @@ export class GameplayInput {
     }
 
     keyUp(e: KeyboardEvent): void {
+        const column = this.columnKeys.indexOf(e.code);
+        if (column >= 0) {
+            this.releaseColumn(column, e);
+            return;
+        }
         const button = this.keyButton(e.code);
         if (button) this.release(button);
         else if (e.code === this.settings.keySmoke.value) this.smoke = false;
+    }
+
+    /** The song time an input event really happened at (see eventSongTime). */
+    private eventTime(e: Event): number {
+        const now = this.now();
+        const t = this.timing;
+        return t ? eventSongTime(now, performance.now(), e.timeStamp, t.rate, t.frameTime) : now;
+    }
+
+    private pressColumn(column: number, e: Event): void {
+        this.columnDown[column] = true;
+        // Emitted even while judgement input is off: a column key also
+        // resumes from the pause overlay (the Player consumes that press).
+        if (this.enabled) this.columnCounts[column]++;
+        this.columnPressed.emit(this.eventTime(e), column);
+    }
+
+    private releaseColumn(column: number, e: Event): void {
+        if (!this.columnDown[column]) return;
+        this.columnDown[column] = false;
+        this.columnReleased.emit(this.eventTime(e), column);
     }
 
     private keyButton(code: string): GameplayButton | null {
@@ -212,6 +257,7 @@ export class GameplayInput {
     /** Forget held state (focus loss, pause) so nothing stays stuck down. */
     releaseAll(): void {
         for (const b of GAMEPLAY_BUTTONS) this.release(b);
+        this.columnDown.fill(false);
         this.smoke = false;
         this.touches.clear();
     }
@@ -221,6 +267,8 @@ export class GameplayInput {
         this.listeners.length = 0;
         this.pressed.clear();
         this.released.clear();
+        this.columnPressed.clear();
+        this.columnReleased.clear();
         this.anyPress.clear();
     }
 }

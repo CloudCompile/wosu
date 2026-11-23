@@ -42,7 +42,15 @@ export interface ReplayResume {
     time: number;
 }
 
-export type ReplayEvent = ReplayFrame | ReplayPress | ReplayResume;
+/** osu!mania: a column's key went down or up (one per column action). */
+export interface ReplayColumn {
+    kind: 'column';
+    time: number;
+    column: number;
+    down: boolean;
+}
+
+export type ReplayEvent = ReplayFrame | ReplayPress | ReplayResume | ReplayColumn;
 
 /** Everything a replay player needs besides the beatmap. */
 export interface ReplayInfo {
@@ -70,14 +78,17 @@ export function quantize(v: number): number {
 
 // ---------------------------------------------------------------------------
 // Binary format: deflate([version, varint count, events...]). Each event is a
-// tag byte (kind in the low 2 bits, buttons / button index above) followed by
-// zigzag varint deltas of time, x and y in 1/16ths.
+// tag byte (kind in the low 2 bits, buttons / button index / column above)
+// followed by zigzag varint deltas of time, x and y in 1/16ths. Version 2
+// adds osu!mania column presses (kind 3); version 1 replays still decode.
 // ---------------------------------------------------------------------------
 
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
+const READABLE_VERSIONS = [1, 2];
 const KIND_FRAME = 0;
 const KIND_PRESS = 1;
 const KIND_RESUME = 2;
+const KIND_COLUMN = 3;
 
 class ByteWriter {
     private buf = new Uint8Array(1024);
@@ -149,6 +160,12 @@ export function encodeReplay(events: readonly ReplayEvent[]): Uint8Array {
             t = et;
             continue;
         }
+        if (e.kind === 'column') {
+            w.byte(KIND_COLUMN | ((e.column * 2 + (e.down ? 1 : 0)) << 2));
+            w.zigzag(et - t);
+            t = et;
+            continue;
+        }
         const extra = e.kind === 'frame' ? e.buttons & (PRESS_BITS | SMOKE_BIT) : BUTTON_ORDER.indexOf(e.button);
         w.byte((e.kind === 'frame' ? KIND_FRAME : KIND_PRESS) | (extra << 2));
         const ex = Math.round(e.x * UNITS), ey = Math.round(e.y * UNITS);
@@ -165,7 +182,7 @@ export function encodeReplay(events: readonly ReplayEvent[]): Uint8Array {
 export function decodeReplay(data: Uint8Array): ReplayEvent[] {
     const r = new ByteReader(inflateSync(data));
     const version = r.byte();
-    if (version !== FORMAT_VERSION) throw new Error(`unsupported replay format ${version}`);
+    if (!READABLE_VERSIONS.includes(version)) throw new Error(`unsupported replay format ${version}`);
     const count = r.varint();
     const events: ReplayEvent[] = [];
     let t = 0, x = 0, y = 0;
@@ -175,6 +192,11 @@ export function decodeReplay(data: Uint8Array): ReplayEvent[] {
         t += r.zigzag();
         if (kind === KIND_RESUME) {
             events.push({ kind: 'resume', time: t / UNITS });
+            continue;
+        }
+        if (kind === KIND_COLUMN) {
+            if (version < 2) throw new Error('replay data is corrupt');
+            events.push({ kind: 'column', time: t / UNITS, column: Math.floor(extra / 2), down: (extra & 1) !== 0 });
             continue;
         }
         x += r.zigzag();

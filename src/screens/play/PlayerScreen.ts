@@ -5,20 +5,26 @@ import { resolveCursorSkin } from '../../app/cursor/CursorSkin';
 import type { Game, Selection } from '../../app/Game';
 import type { MusicTrack } from '../../audio/MusicTrack';
 import { calculateDifficulty } from '../../beatmap/difficulty';
+import { buildManiaBeatmap, calculateManiaStars, maniaMaxCombo } from '../../beatmap/mania';
 import { buildPlayableBeatmap, playableOptions } from '../../beatmap/processing';
 import type { Storyboard } from '../../beatmap/storyboard';
 import type { LegacySkin } from '../../skin/LegacySkin';
 import type { SkinChain } from '../../skin/SkinChain';
-import type { BeatmapData, PlayableBeatmap, PlayableSlider } from '../../beatmap/types';
+import type { BeatmapData, PlayableBeatmap, PlayableManiaBeatmap, PlayableSlider } from '../../beatmap/types';
 import { clamp01 } from '../../core/math';
 import { tween, tweener } from '../../core/Tweener';
 import { comboColor } from '../../gameplay/drawables/context';
+import { ManiaPlayfield } from '../../gameplay/drawables/ManiaPlayfield';
 import { PLAYFIELD_H, PLAYFIELD_W, Playfield } from '../../gameplay/drawables/Playfield';
 import { SmokeLayer } from '../../gameplay/drawables/Smoke';
 import { BackgroundVideo } from '../../gameplay/BackgroundVideo';
 import { StoryboardView } from '../../gameplay/StoryboardView';
 import { GameplayClock } from '../../gameplay/GameplayClock';
-import { GameplayRules, type CursorState, type SliderState, type SpinnerState } from '../../gameplay/GameplayRules';
+import { GameplayRules, type CursorState, type JudgementRules, type SliderState, type SpinnerState } from '../../gameplay/GameplayRules';
+import { MANIA_LABEL } from '../../gameplay/scoring/ScoreProcessor';
+import { ManiaScoreProcessor } from '../../gameplay/scoring/ManiaScoreProcessor';
+import { ManiaRules, maniaAutoEvents, type ManiaAutoEvent } from '../../gameplay/mania/ManiaRules';
+import { maniaKeyLabels, maniaKeyLayout } from '../../gameplay/mania/layout';
 import { RulesDriver } from '../../gameplay/RulesDriver';
 import { buttonMask, encodeReplay, SMOKE_BIT, type ReplayInfo } from '../../gameplay/replay/Replay';
 import { ReplayPlayback } from '../../gameplay/replay/ReplayPlayback';
@@ -124,9 +130,16 @@ export class PlayerScreen extends Screen {
     outcome: PlayerOutcome = 'none';
 
     private beatmap!: PlayableBeatmap;
-    private score!: ScoreProcessor;
+    /** osu!mania: the map's notes (the beats are shared through `beatmap`). */
+    private maniaBeatmap: PlayableManiaBeatmap | null = null;
+    private mania = false;
+    private score!: ScoreProcessor | ManiaScoreProcessor;
     private health!: HealthProcessor;
-    private rules!: GameplayRules;
+    /** The active judgement engine (osu!standard's or osu!mania's). */
+    private rules!: JudgementRules;
+    /** osu!standard's judgement engine (std-only paths use its richer state). */
+    private stdRules: GameplayRules | null = null;
+    private maniaRules: ManiaRules | null = null;
     private clock!: GameplayClock;
     private input!: GameplayInput;
     private hitsounds!: HitsoundPlayer;
@@ -134,7 +147,7 @@ export class PlayerScreen extends Screen {
     private timed!: TimedSounds;
     /** This frame's look-ahead: context time (s) and the music's song time (ms) it reaches. */
     private horizon = { context: 0, song: 0 };
-    private playfield!: Playfield;
+    private playfield!: Playfield | ManiaPlayfield;
     private hud!: HUDOverlay;
     /** osu!stable's combo bursts (skins with comboburst art), between the background and the playfield. */
     private bursts!: ComboBursts;
@@ -143,6 +156,13 @@ export class PlayerScreen extends Screen {
     /** Cursor smoke, under the hit objects (lazer's SmokeContainer). */
     private smoke!: SmokeLayer;
     private auto: AutoPlayer | null = null;
+    /** osu!mania's autoplay: every note's press and release, in time order. */
+    private maniaAuto: ManiaAutoEvent[] = [];
+    private maniaAutoIndex = 0;
+    /** osu!mania: the column keys' labels (key overlay). */
+    private maniaLabels: string[] = [];
+    private readonly autoColumnsDown: boolean[] = [];
+    private readonly autoColumnsCounts: number[] = [];
     private mode: InputMode = 'normal';
     /** Feeds the rules (sub-stepped frames, presses, resumes); see RulesDriver. */
     private driver!: RulesDriver;
@@ -280,16 +300,20 @@ export class PlayerScreen extends Screen {
         };
         // A replay judges with the mechanics its score was set with.
         const mechanics = o.replay?.mechanics ?? g.settings.gameplayMechanics.value;
-        const beatmap = (this.beatmap = buildPlayableBeatmap(data, mods, playableOptions(mechanics)));
+        // osu!mania is judged by its own rules; its map still carries a
+        // standard-shaped view for the shared HUD, sounds and timing.
+        this.mania = raw.general.mode === 3;
+        const mania = this.mania ? buildManiaBeatmap(data, mods) : null;
+        this.maniaBeatmap = mania;
+        const beatmap = (this.beatmap = mania ?? buildPlayableBeatmap(data, mods, playableOptions(mechanics)));
         const d = o.data.difficulty;
-        const objectCount = beatmap.hitObjects.length;
+        const objectCount = mania ? mania.notes.length : beatmap.hitObjects.length;
         const breakTime = beatmap.breaks.reduce((t, b) => t + Math.max(0, b.endTime - b.startTime), 0);
-        this.score = new ScoreProcessor({
-            difficultyMultiplier: difficultyMultiplier(
-                { hp: d.hpDrainRate, cs: d.circleSize, od: d.overallDifficulty }, objectCount, beatmap.endTime - beatmap.startTime - breakTime),
-            modMultiplier: scoreMultiplier(mods),
-            mechanics,
-        });
+        const diffMultiplier = difficultyMultiplier(
+            { hp: d.hpDrainRate, cs: d.circleSize, od: d.overallDifficulty }, objectCount, beatmap.endTime - beatmap.startTime - breakTime);
+        this.score = mania
+            ? new ManiaScoreProcessor({ difficultyMultiplier: diffMultiplier, modMultiplier: scoreMultiplier(mods), mechanics })
+            : new ScoreProcessor({ difficultyMultiplier: diffMultiplier, modMultiplier: scoreMultiplier(mods), mechanics });
         const noFail = mods.has('NF') || this.mode === 'autoplay' || this.mode === 'relax' || this.mode === 'autopilot';
         this.health = new HealthProcessor({
             hpDifficulty: beatmap.difficulty.hp,
@@ -301,9 +325,28 @@ export class PlayerScreen extends Screen {
             mechanics,
             objects: beatmap.hitObjects,
             od: beatmap.difficulty.od,
+            mania: !!mania,
         });
-        this.rules = new GameplayRules(beatmap, mods, this.score, this.health, mechanics);
-        if (this.mode === 'autoplay' || this.mode === 'autopilot') this.auto = new AutoPlayer(beatmap);
+        if (mania) {
+            const rules = new ManiaRules(mania, mods, this.score as ManiaScoreProcessor, this.health, mechanics);
+            this.maniaRules = rules;
+            this.rules = rules;
+        } else {
+            const std = new GameplayRules(beatmap, mods, this.score as ScoreProcessor, this.health, mechanics);
+            this.stdRules = std;
+            this.rules = std;
+        }
+        if (mania) {
+            if (this.mode === 'autoplay') {
+                this.maniaAuto = maniaAutoEvents(mania);
+                this.autoColumnsDown.length = mania.keys;
+                this.autoColumnsCounts.length = mania.keys;
+                this.autoColumnsDown.fill(false);
+                this.autoColumnsCounts.fill(0);
+            }
+        } else if (this.mode === 'autoplay' || this.mode === 'autopilot') {
+            this.auto = new AutoPlayer(beatmap);
+        }
         this.driver = new RulesDriver(this.rules, this.mode, this.auto);
         if (this.mode === 'autoplay') this.driver.beforeStep = t => this.feedAutoplay(t);
         else if (o.replay) this.replay = new ReplayPlayback(o.replay.events);
@@ -323,6 +366,12 @@ export class PlayerScreen extends Screen {
         this.input.relative = g.input.pointerLock;
         // Presses are judged at their event timestamps (a busy frame doesn't make them late).
         this.input.timing = this.clock;
+        if (mania) {
+            // Settings → Input holds a layout per key count; defaults when untouched.
+            const keys = maniaKeyLayout(mania.keys, g.settings.maniaKeys.value);
+            this.input.setColumnKeys(keys);
+            this.maniaLabels = maniaKeyLabels(mania.keys, g.settings.maniaKeys.value);
+        }
         // Presses on these buttons are theirs (Pixi hit-tests a locked pointer at its virtual cursor too).
         this.input.ignorePointer = (x, y) => {
             const onHold = this.holdButton.containsPoint(x, y);
@@ -344,22 +393,29 @@ export class PlayerScreen extends Screen {
             });
         }
 
-        this.playfield = new Playfield({
-            renderer: g.app.renderer,
-            skin: chain,
-            beatmap,
-            rules: this.rules,
-            // HD's "Only fade approach circles" keeps the objects' normal fading.
-            hidden: mods.has('HD') && !hiddenSettings(mods).onlyFadeApproachCircles,
-            hideApproachCircles: mods.has('HD'),
-            hideNumbers: g.settings.hideNumbers.value,
-            hideFollowPoints: g.settings.hideFollowPoints.value,
-            snakingIn: g.settings.snakingIn.value,
-            snakingOut: g.settings.snakingOut.value,
-            kiaiFlashes: g.settings.kiaiFlash.value,
-            instafadeCircles: g.settings.instafadeCircles.value,
-            instafadeSliders: g.settings.instafadeSliders.value,
-        });
+        this.playfield = mania
+            ? new ManiaPlayfield({
+                renderer: g.app.renderer,
+                skin: chain,
+                beatmap: mania,
+                states: (this.maniaRules as ManiaRules).states,
+            })
+            : new Playfield({
+                renderer: g.app.renderer,
+                skin: chain,
+                beatmap,
+                rules: this.rules as GameplayRules,
+                // HD's "Only fade approach circles" keeps the objects' normal fading.
+                hidden: mods.has('HD') && !hiddenSettings(mods).onlyFadeApproachCircles,
+                hideApproachCircles: mods.has('HD'),
+                hideNumbers: g.settings.hideNumbers.value,
+                hideFollowPoints: g.settings.hideFollowPoints.value,
+                snakingIn: g.settings.snakingIn.value,
+                snakingOut: g.settings.snakingOut.value,
+                kiaiFlashes: g.settings.kiaiFlash.value,
+                instafadeCircles: g.settings.instafadeCircles.value,
+                instafadeSliders: g.settings.instafadeSliders.value,
+            });
         this.playfield.judgements.hideGreat = g.settings.hideGreat.value;
         this.playfield.judgements.hitLighting = g.settings.hitLighting.value;
         this.smoke = new SmokeLayer(chain);
@@ -378,6 +434,7 @@ export class PlayerScreen extends Screen {
             // lazer names Autoplay's score "Autoplay"; a replay shows its player.
             playerName: this.mode === 'autoplay' ? 'Autoplay' : o.replay ? o.replay.player || 'Guest' : g.profile.name.value,
             introStart: start,
+            mania: this.mania,
             // The selected skin's saved layout (skin editor), and what its extra components show.
             skinId: g.skins.currentInfo.value?.id ?? '',
             mods,
@@ -516,7 +573,16 @@ export class PlayerScreen extends Screen {
         rules.objectJudged.add(info => {
             const h = objs[info.index];
             this.lastJudgementTime = Math.max(this.lastJudgementTime, info.time);
-            this.playfield.judgements.add(info.result, info.x, info.y, info.time, comboColor(this.playfield.ctx, h), info.variant);
+            // osu!mania shows its own labels (320/300/…) over the note's column.
+            const maniaLabel = info.mania ? MANIA_LABEL[info.mania] : undefined;
+            const color = maniaLabel !== undefined ? 0xffffff : comboColor((this.playfield as Playfield).ctx, h);
+            this.playfield.judgements.add(info.result, info.x, info.y, info.time, color, info.variant, maniaLabel);
+            if (maniaLabel !== undefined) {
+                // Mania's hitsounds are the note's own, played as its head is
+                // hit (a hold's tail has no sample of its own).
+                if (info.maniaNode !== 'tail' && info.result !== 'miss' && !this.catchingUp) this.hitsounds.hit(h);
+                return;
+            }
             const hit = info.result !== 'miss' && !this.catchingUp;
             // Autoplay's circles were scheduled ahead (scheduleNested): kept on a hit, called off on a miss.
             if (this.timed.settle(`${info.index}:c`, hit) || !hit) return;
@@ -560,6 +626,22 @@ export class PlayerScreen extends Screen {
         this.input.anyPress.add((x, y) => {
             // Not a click on settings opened over the resume cursor.
             if (this.phase === 'resuming' && this.resume.hits(x, y) && !this.game.overlays.anyOpen) this.finishResume();
+        });
+        // osu!mania: a column's key, recorded and judged at its event time.
+        this.input.columnPressed.add((time, column) => {
+            // A key press resumes a pause (the cursor click's keyboard equivalent).
+            if (this.phase === 'resuming' && !this.game.overlays.anyOpen) {
+                this.finishResume();
+                return;
+            }
+            if (this.phase !== 'playing' || !this.recorder) return;
+            const e = this.recorder.column(time, column, true);
+            this.driver.column(e.time, e.column, true);
+        });
+        this.input.columnReleased.add((time, column) => {
+            if (this.phase !== 'playing' || !this.recorder) return;
+            const e = this.recorder.column(time, column, false);
+            this.driver.column(e.time, e.column, false);
         });
 
         const blur = () => {
@@ -775,7 +857,9 @@ export class PlayerScreen extends Screen {
 
     /** Playfield, video, break dim and HUD for song time `time`. */
     private renderState(time: number, dt: number): void {
-        this.playfield.update(this.phase === 'failed' ? this.failedAtTime : time);
+        const t = this.phase === 'failed' ? this.failedAtTime : time;
+        if (this.mania) (this.playfield as ManiaPlayfield).update(t, this.columnsDown);
+        else (this.playfield as Playfield).update(t);
         this.video?.sync(time, this.phase === 'playing' || this.phase === 'completed', this.clock.rate);
         this.storyboard?.update(this.phase === 'failed' ? this.failedAtTime : time, this.phase === 'playing', this.game.audio, { timed: this.timed, until: this.horizon.song });
         this.updateBreakDim(time);
@@ -791,12 +875,31 @@ export class PlayerScreen extends Screen {
             grade: this.score.grade(this.options.mods.has('HD') || this.options.mods.has('FL')),
             down: this.keysDown,
             counts: this.mode === 'autoplay' ? this.autoCounts : this.replay ? this.replay.counts : this.input.counts,
+            // osu!mania: the key overlay counts its columns, the judgement
+            // counter its six tiers.
+            columns: this.mania ? { down: this.columnsDown, counts: this.columnsCounts, labels: this.maniaLabels } : undefined,
+            maniaCounts: this.mania ? (this.score as ManiaScoreProcessor).counts() : undefined,
             // lazer's localUserPlaying (breaks and the intro count as "not playing").
             playing: this.phase === 'playing' && time >= this.playStart && !this.hud.isBreak(time) && !this.rules.finished,
             stats: this.liveStats(),
             hitErrors: this.rules.hitErrors,
         });
         this.stablePlay.update(this.phase === 'failed' ? this.failedAtTime : time, this.health.hp);
+    }
+
+    /** osu!mania: the held columns and press counts shown (autoplay's, the replay's or the user's). */
+    private get columnsDown(): readonly boolean[] {
+        if (!this.mania) return [];
+        if (this.mode === 'autoplay') return this.autoColumnsDown;
+        if (this.replay) return this.replay.columnDown;
+        return this.input.columnDown;
+    }
+
+    private get columnsCounts(): readonly number[] {
+        if (!this.mania) return [];
+        if (this.mode === 'autoplay') return this.autoColumnsCounts;
+        if (this.replay) return this.replay.columnCounts;
+        return this.input.columnCounts;
     }
 
     /**
@@ -859,14 +962,15 @@ export class PlayerScreen extends Screen {
      */
     override get localUserPlaying(): boolean {
         const aiming = this.phase === 'loading' || this.phase === 'playing' || this.phase === 'resuming';
-        return !this.released && aiming && this.mode !== 'autoplay' && this.mode !== 'autopilot' && !this.replay;
+        return !this.released && !this.mania && aiming && this.mode !== 'autoplay' && this.mode !== 'autopilot' && !this.replay;
     }
 
     /** Cursor in playfield coordinates; also drives the on-screen cursor. */
     private updateCursor(time: number, _dt: number): { x: number; y: number; held: boolean } {
         const c = this.game.cursor;
         // lazer swaps to the menu cursor once the pause / fail menu is up; autoplay keeps the user's cursor visible.
-        c.gameplayActive = this.phase !== 'paused' && !(this.phase === 'failed' && this.menu.shown);
+        // osu!mania has no cursor at all.
+        c.gameplayActive = !this.mania && this.phase !== 'paused' && !(this.phase === 'failed' && this.menu.shown);
         c.replayLoaded = this.mode === 'autoplay' || !!this.replay;
         c.playfieldScale = this.view.scale;
         c.circleSize = this.beatmap.difficulty.cs;
@@ -899,6 +1003,11 @@ export class PlayerScreen extends Screen {
      */
     private updateCursorParticles(time: number, held: boolean): void {
         const p = this.game.cursor.gameplay.particles;
+        if (this.mania) {
+            // No cursor in osu!mania: nothing to draw particles from.
+            p.state = { kiai: false, breakTime: false, left: false, right: false, running: false, rate: this.clock.rate };
+            return;
+        }
         const down = this.keysDown;
         const playing = this.phase === 'playing';
         let kiai = false;
@@ -909,7 +1018,7 @@ export class PlayerScreen extends Screen {
                 const h = objs[i];
                 if (h.time > time) break;
                 if (time > h.endTime || !cp.at(h.time).kiai) continue;
-                const s = this.rules.states[i];
+                const s = this.stdRules!.states[i];
                 if (s.kind === 'slider') kiai = (s as SliderState).tracking;
                 else if (s.kind === 'spinner') kiai = held && (s as SpinnerState).result === null;
             }
@@ -955,13 +1064,30 @@ export class PlayerScreen extends Screen {
      * A press also ripples the cursor, like every osu! action in lazer.
      */
     private updateSmoke(time: number, cursor: { x: number; y: number }): void {
-        const on = this.replay ? this.replay.smoke : this.mode !== 'autoplay' && this.input.smoke;
+        // No cursor to draw smoke from in osu!mania.
+        const on = !this.mania && (this.replay ? this.replay.smoke : this.mode !== 'autoplay' && this.input.smoke);
         if (this.smoke.input(time, on, cursor.x, cursor.y)) this.game.cursor.gameplay.ripple();
         this.smoke.draw(time);
     }
 
     private feedAutoplay(time: number): void {
-        if (this.mode !== 'autoplay' || !this.auto) return;
+        if (this.mode !== 'autoplay') return;
+        if (this.mania) {
+            const rules = this.maniaRules;
+            while (this.maniaAutoIndex < this.maniaAuto.length && this.maniaAuto[this.maniaAutoIndex].time <= time) {
+                const e = this.maniaAuto[this.maniaAutoIndex++];
+                if (e.down) {
+                    rules?.pressColumn(e.time, e.column);
+                    this.autoColumnsDown[e.column] = true;
+                    this.autoColumnsCounts[e.column] = (this.autoColumnsCounts[e.column] ?? 0) + 1;
+                } else {
+                    rules?.releaseColumn(e.time, e.column);
+                    this.autoColumnsDown[e.column] = false;
+                }
+            }
+            return;
+        }
+        if (!this.auto) return;
         const presses = this.auto.presses;
         while (this.autoPressIndex < presses.length && presses[this.autoPressIndex].time <= time) {
             const p = presses[this.autoPressIndex++];
@@ -996,12 +1122,13 @@ export class PlayerScreen extends Screen {
      * off on a miss (a slider let go in the last few ms may still tick).
      */
     private scheduleNested(time: number): void {
+        if (this.mania) return;
         const objs = this.beatmap.hitObjects;
         const auto = this.mode === 'autoplay';
         for (let i = this.loopStart; i < objs.length; i++) {
             const h = objs[i];
             if (h.time - 1000 > time) break;
-            const s = this.rules.states[i];
+            const s = this.stdRules!.states[i];
             // Autoplay's own hits are certain, so they're scheduled too (its presses are frame-driven).
             if (auto && s.result === null && h.time > time - 1000) {
                 if (h.kind === 'circle') this.timed.schedule(`${i}:c`, h.time, this.horizon.context, when => this.hitsounds.hit(h, when));
@@ -1020,12 +1147,13 @@ export class PlayerScreen extends Screen {
 
     /** Slider slide and spinner spin loops follow the tracking state. */
     private updateLoops(time: number): void {
+        if (this.mania) return;
         const objs = this.beatmap.hitObjects;
         while (this.loopStart < objs.length && objs[this.loopStart].endTime < time - 1000) this.loopStart++;
         for (let i = this.loopStart; i < objs.length; i++) {
             const h = objs[i];
             if (h.time - 1000 > time) break;
-            const s = this.rules.states[i];
+            const s = this.stdRules!.states[i];
             if (s.kind === 'slider') {
                 this.hitsounds.setSliding(h as PlayableSlider, (s as SliderState).tracking && time >= h.time && time < h.endTime);
             } else if (s.kind === 'spinner') {
@@ -1216,12 +1344,13 @@ export class PlayerScreen extends Screen {
 
     /** A started slider is being held right now (OsuFlashlight.OnSliderTrackingChange). */
     private sliderTracked(time: number): boolean {
+        if (this.mania) return false;
         const objs = this.beatmap.hitObjects;
         for (let i = this.loopStart; i < objs.length; i++) {
             const h = objs[i];
             if (h.time > time) break;
             if (h.kind !== 'slider' || time >= h.endTime) continue;
-            if ((this.rules.states[i] as SliderState).tracking) return true;
+            if ((this.stdRules!.states[i] as SliderState).tracking) return true;
         }
         return false;
     }
@@ -1471,6 +1600,8 @@ export class PlayerScreen extends Screen {
 
     /** The play's pp (an estimate, see gameplay/performance), or null if it can't be worked out. */
     private finalPerformance(): number | null {
+        // There is no osu!mania pp model here, and standard's doesn't apply.
+        if (this.mania) return null;
         try {
             const pp = this.hud.performance.pp(this.liveStats());
             return Number.isFinite(pp) ? pp : null;
@@ -1489,7 +1620,9 @@ export class PlayerScreen extends Screen {
         const errors = this.rules.hitErrors.slice();
         const mean = errors.length ? errors.reduce((a, b) => a + b, 0) / errors.length : 0;
         const variance = errors.length ? errors.reduce((a, b) => a + (b - mean) ** 2, 0) / errors.length : 0;
-        const mapMaxCombo = this.beatmap.hitObjects.reduce((n, h) => n + (h.kind === 'slider' ? h.events.length : 1), 0);
+        const mapMaxCombo = this.mania
+            ? maniaMaxCombo(this.maniaBeatmap?.notes ?? [])
+            : this.beatmap.hitObjects.reduce((n, h) => n + (h.kind === 'slider' ? h.events.length : 1), 0);
         this.healthGraph.push([this.beatmap.endTime, this.health.hp]);
         return {
             setKey: set.key,
@@ -1509,6 +1642,10 @@ export class PlayerScreen extends Screen {
             count100: s.count100,
             count50: s.count50,
             countMiss: s.countMiss,
+            // osu!mania's extra tiers.
+            ...(this.mania
+                ? { count320: (s as ManiaScoreProcessor).count320, count200: (s as ManiaScoreProcessor).count200 }
+                : {}),
             countGeki: s.countGeki,
             countKatu: s.countKatu,
             sliderTicksHit: s.sliderTicksHit,
@@ -1534,6 +1671,12 @@ export class PlayerScreen extends Screen {
         const base = this.options.selection.diff.stars;
         const relevant = ratingMods(this.options.mods);
         if (base === null || !relevant) return base;
+        if (this.mania) {
+            // The mania estimate, scaled by how the mods change it (it only reads OD through HR/EZ).
+            const nomod = calculateManiaStars(this.options.data, NO_MODS);
+            const played = calculateManiaStars(this.options.data, relevant);
+            return nomod > 0 ? Math.round(base * (played / nomod) * 100) / 100 : base;
+        }
         try {
             // Built as song select's modAdjustedStars does (legacy tails), so the figures match.
             const nomod = calculateDifficulty(buildPlayableBeatmap(this.options.data, NO_MODS)).stars;
@@ -1569,6 +1712,7 @@ export class PlayerScreen extends Screen {
                 count100: r.count100,
                 count50: r.count50,
                 countMiss: r.countMiss,
+                ...(r.count320 !== undefined ? { count320: r.count320, count200: r.count200 ?? 0 } : {}),
                 countGeki: r.countGeki,
                 countKatu: r.countKatu,
                 grade: r.grade,

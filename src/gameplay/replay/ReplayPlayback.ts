@@ -11,6 +11,9 @@ export class ReplayPlayback {
     readonly down: Record<GameplayButton, boolean> = { K1: false, K2: false, M1: false, M2: false };
     /** Presses per button (key overlay). */
     readonly counts: Record<GameplayButton, number> = { K1: 0, K2: 0, M1: 0, M2: 0 };
+    /** osu!mania: each column's held state and press count (the key overlay). */
+    readonly columnDown: boolean[] = [];
+    readonly columnCounts: number[] = [];
     /** The recorded smoke key. */
     smoke = false;
     private index = 0;
@@ -37,6 +40,9 @@ export class ReplayPlayback {
                 this.down[e.button] = true;
                 this.counts[e.button]++;
                 this.last = e;
+            } else if (e.kind === 'column') {
+                this.columnDown[e.column] = e.down;
+                if (e.down) this.columnCounts[e.column] = (this.columnCounts[e.column] ?? 0) + 1;
             }
             apply(e);
         }
@@ -47,7 +53,7 @@ export class ReplayPlayback {
         const from = this.last;
         for (let i = this.index; i < this.events.length; i++) {
             const e = this.events[i];
-            if (e.kind === 'resume') continue;
+            if (e.kind === 'resume' || e.kind === 'column') continue;
             const span = e.time - from.time;
             if (!(span > 0) || time <= from.time) return { x: from.x, y: from.y };
             const t = Math.min(1, (time - from.time) / span);

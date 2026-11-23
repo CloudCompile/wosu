@@ -8,7 +8,7 @@ import {
     lazerSpinnerSpins, spinnerClearRpm, stableHalfSpinAward, stableSpinnerHalfSpins, type GameplayMechanics,
 } from './scoring/mechanics';
 import {
-    resultForError, sliderResult, spinnerResult, type HitResult, type NestedKind, type ScoreProcessor,
+    resultForError, sliderResult, spinnerResult, type HitResult, type ManiaJudgement, type NestedKind, type ScoreProcessor,
 } from './scoring/ScoreProcessor';
 
 /** Spun Out's fixed spin speed (stable: 287 RPM). */
@@ -87,6 +87,10 @@ export interface HitEventInfo {
     error: number | null;
     /** stable's geki / katu, when this object ends its combo (see comboEnd). */
     variant: ComboEndVariant | null;
+    /** osu!mania's finer judgement (320/300/200/100/50/miss), when this is a mania note. */
+    mania?: ManiaJudgement;
+    /** osu!mania: which end of a hold this judgement is (holds are judged twice). */
+    maniaNode?: 'head' | 'tail';
 }
 
 /** Per-spinner counting state (not shown to drawables). */
@@ -680,4 +684,33 @@ export function sliderProgress(h: PlayableSlider, time: number): number {
 export function sliderSpan(h: PlayableSlider, time: number): number {
     if (h.spanDuration <= 0) return 0;
     return Math.max(0, Math.min(h.slides - 1, Math.floor((time - h.time) / h.spanDuration)));
+}
+
+/**
+ * What the Player and RulesDriver need from a judgement engine, shared by
+ * osu!standard's GameplayRules and osu!mania's ManiaRules.
+ */
+export interface JudgementRules {
+    /** Per-object judgement state (only `result` is read generically). */
+    readonly states: readonly { result: HitResult | ManiaJudgement | null }[];
+    readonly objectJudged: Signal<[HitEventInfo]>;
+    readonly nestedJudged: Signal<[number, SliderEvent, boolean]>;
+    readonly headHit: Signal<[number, number, number]>;
+    readonly shaken: Signal<[number]>;
+    readonly spun: Signal<[number, boolean]>;
+    /** Timed hit errors (ms), for the unstable rate and the results histogram. */
+    readonly hitErrors: number[];
+    /** Every object judged? */
+    readonly finished: boolean;
+    readonly windows: { w300: number; w100: number; w50: number };
+    readonly mechanics: GameplayMechanics;
+    /** Advance to `time` (passive judgement and drain). */
+    update(time: number, cursor: CursorState): void;
+    /** A key/button went down at `time` with the cursor at (x, y). */
+    press(time: number, x: number, y: number): void;
+    /** Gameplay resumed after a pause. */
+    resetSpinnerTracking(): void;
+    /** osu!mania: a column's key went down / up. */
+    pressColumn?(time: number, column: number): void;
+    releaseColumn?(time: number, column: number): void;
 }
