@@ -1,7 +1,7 @@
 import { Container, Graphics, type Text } from 'pixi.js';
 import type { Game } from '../../app/Game';
 import { Overlay } from '../../app/Overlay';
-import { runBenchmark, type BenchmarkProgress, type BenchmarkReport } from '../../bench/suite';
+import { BenchmarkCancelled, runBenchmark, type BenchmarkProgress, type BenchmarkReport } from '../../bench/suite';
 import { CPU_WORKLOADS } from '../../bench/cpu';
 import { SCENE_SCALES, sceneId } from '../../bench/gpu';
 import { formatMs, formatRate, round } from '../../bench/stats';
@@ -13,9 +13,9 @@ import { ColorProvider, Colors, Metrics } from '../../ui/theme';
 import { UIComponent } from '../../ui/UIComponent';
 import { tween } from '../../core/Tweener';
 import type { Action } from '../../input/bindings';
-import type { GraphicsValues } from '../../settings/GraphicsPreset';
+import { applyGraphicsValues, type GraphicsValues } from '../../settings/GraphicsPreset';
 import { benchmarkToStorage, formatAge, loadBenchmark, saveBenchmark, type StoredBenchmark } from '../../settings/benchmarkStore';
-import { describeTiers, deviceHints, gpuNameOf } from '../../settings/deviceTiers';
+import { describeTiers, deviceHints, rendererGpuName, shortGpuName } from '../../settings/deviceTiers';
 
 const colors = new ColorProvider('purple');
 const CARD_W = 720;
@@ -238,7 +238,8 @@ export class PersonalizeOverlay extends Overlay {
         this.clearResult();
         this.resultLine(`Last run ${formatAge(s.at)}.`, 12, '600', Colors.gray9);
         this.resultLine(`CPU index ${round(s.cpuIndex, 2)} · ${describeTiers(s.tiers)}`, 14, '700');
-        if (s.gpuName) this.resultLine(s.gpuName, 11, '500', Colors.gray9);
+        const shortName = shortGpuName(s.gpuName);
+        if (shortName) this.resultLine(shortName, 11, '500', Colors.gray9);
         for (const [id, rate] of Object.entries(s.cpuRate)) {
             const w = CPU_WORKLOADS.find(x => x.id === id);
             const row = this.rows.get(id);
@@ -271,12 +272,14 @@ export class PersonalizeOverlay extends Overlay {
 
     private async run(): Promise<void> {
         if (this.running) return;
+        let cancelled = false;
         this.running = true;
         this.stopRequested = false;
         this.fraction = 0;
         this.progressLabel = 'starting';
         this.clearResult();
         for (const row of this.rows.values()) row.setPending();
+        this.scroll.scrollTo(0, false);
         this.updateButtons();
         const app = this.game.app;
         const started = performance.now();
@@ -285,8 +288,7 @@ export class PersonalizeOverlay extends Overlay {
         const dpr = Math.min(3, Math.max(0.5, window.devicePixelRatio || 1));
         const nativeW = Math.max(320, Math.round(window.innerWidth * dpr));
         const nativeH = Math.max(180, Math.round(window.innerHeight * dpr));
-        const adapter = (app.renderer as unknown as { gl?: unknown; device?: { adapter?: unknown } });
-        const gpuName = gpuNameOf(adapter.gl ?? adapter.device?.adapter);
+        const gpuName = rendererGpuName(app.renderer);
         try {
             const report = await runBenchmark({
                 renderer: app.renderer,
@@ -296,7 +298,10 @@ export class PersonalizeOverlay extends Overlay {
                 height: nativeH,
                 refreshHz: app.loop.stats.refreshHz || 60,
                 onProgress: p => this.onProgress(p),
-                shouldStop: () => this.stopRequested,
+                // A hidden tab gets its rAF throttled to ~1 Hz, so every
+                // sample it takes is a lie. There is no way to pause a run
+                // and keep the timings comparable, so it stops instead.
+                shouldStop: () => this.stopRequested || document.visibilityState !== 'visible',
             });
             this.report = report;
             this.stored = benchmarkToStorage(report);
@@ -312,12 +317,24 @@ export class PersonalizeOverlay extends Overlay {
             this.showReport(report);
             this.status.text = `Finished in ${((performance.now() - started) / 1000).toFixed(1)} s`;
         } catch (e) {
-            console.warn('benchmark failed', e);
-            this.status.text = 'The benchmark failed; see the console.';
-            for (const row of this.rows.values()) if (row.visible) row.setFailed('failed');
+            cancelled = e instanceof BenchmarkCancelled;
+            if (cancelled) {
+                // Closed part-way through (or the tab went to the
+                // background): keep showing whatever the run before it found
+                // rather than a half-filled one.
+                this.status.text = document.visibilityState === 'visible'
+                    ? 'Stopped.'
+                    : 'Stopped: the tab was hidden, and a hidden tab cannot time frames.';
+                if (this.stored) this.showStored(this.stored);
+                else for (const row of this.rows.values()) row.setPending('not run');
+            } else {
+                console.warn('benchmark failed', e);
+                this.status.text = 'The benchmark failed; see the console.';
+                for (const row of this.rows.values()) if (row.visible) row.setFailed('failed');
+            }
         } finally {
             this.running = false;
-            this.fraction = 1;
+            this.fraction = cancelled ? 0 : 1;
             this.updateButtons();
             this.dirty = true;
         }
@@ -328,8 +345,11 @@ export class PersonalizeOverlay extends Overlay {
         this.progressLabel = p.stage === 'cpu' ? 'CPU' : p.stage === 'gpu' ? 'GPU' : 'finishing';
         const row = this.rows.get(p.label);
         if (row) {
-            if (p.stage === 'cpu') {
-                row.sample(0, 'running…');
+            if (p.value !== undefined) {
+                // CPU reports milliseconds per chunk; the GPU a frame time.
+                row.sample(p.value, p.stage === 'cpu'
+                    ? `running… ${formatMs(p.value)}/chunk`
+                    : `running… ${formatMs(p.value)}/frame`);
             } else {
                 row.setRunning();
             }
@@ -341,7 +361,8 @@ export class PersonalizeOverlay extends Overlay {
     private showReport(r: BenchmarkReport): void {
         this.clearResult();
         this.resultLine(`CPU index ${round(r.cpuIndex, 2)} · ${describeTiers(r.tiers)}`, 14, '700');
-        if (r.gpuName) this.resultLine(r.gpuName, 11, '500', Colors.gray9);
+        const shortName = shortGpuName(r.gpuName);
+        if (shortName) this.resultLine(shortName, 11, '500', Colors.gray9);
         for (const t of r.cpu) {
             this.rows.get(t.id)?.setDone(`${formatRate(t.rate, t.unit)} · ${formatMs(t.timing.median)}/chunk`);
         }
@@ -358,7 +379,10 @@ export class PersonalizeOverlay extends Overlay {
         this.resultLine('Recommended', 13, '700', Colors.pinkLight);
         for (const line of describeValues(r.values)) this.resultLine(line, 12);
         this.applyButton.enabled = true;
+        this.updateButtons();
         this.layoutContent();
+        // The summary is at the bottom: bring it into view when the run ends.
+        this.scroll.scrollTo(this.scroll.contentHeight, true);
     }
 
     /** Write the recommended values into the settings. */
@@ -366,7 +390,7 @@ export class PersonalizeOverlay extends Overlay {
         const values = this.report?.values ?? this.stored?.values;
         if (!values) return;
         const s = this.game.settings;
-        applyValues(s, values);
+        applyGraphicsValues(s, values);
         s.refreshDeviceInfo();
         this.game.notifications.success('Graphics settings set to this device\'s benchmark.');
         this.status.text = 'Applied. The values are in Settings → Graphics to tweak.';
@@ -431,7 +455,6 @@ export class PersonalizeOverlay extends Overlay {
     private layoutContent(): void {
         const innerW = this.viewW - PAD * 2;
         let y = 4;
-        let rowIndex = 0;
         for (const child of this.scroll.content.children) {
             if (child === this.resultBox) {
                 y += 6;
@@ -460,13 +483,10 @@ export class PersonalizeOverlay extends Overlay {
                 child.position.set(PAD, y);
                 child.resize(innerW, child.rowHeight);
                 y += child.rowHeight + 6;
-                rowIndex++;
                 continue;
             }
         }
         this.scroll.contentHeight = y + 8;
-        // A new run starts at the top; a restored report starts at its summary.
-        if (!this.running && rowIndex > 0) this.scroll.scrollTo(this.scroll.contentHeight);
     }
 
     protected override popIn(): void {
@@ -537,23 +557,6 @@ export class PersonalizeOverlay extends Overlay {
         }
         return false;
     }
-}
-
-/** Write a values record into the settings (the same bindables the presets use). */
-function applyValues(s: Game['settings'], v: GraphicsValues): void {
-    s.resolutionScale.value = v.resolutionScale;
-    s.antialias.value = v.antialias;
-    s.parallax.value = v.parallax;
-    s.backgroundBlur.value = v.backgroundBlur;
-    s.backgroundVideo.value = v.backgroundVideo;
-    s.storyboard.value = v.storyboard;
-    s.hitLighting.value = v.hitLighting;
-    s.kiaiFlash.value = v.kiaiFlash;
-    s.comboBursts.value = v.comboBursts;
-    s.cursorTrail.value = v.cursorTrail;
-    s.cursorRipples.value = v.cursorRipples;
-    s.hideFollowPoints.value = v.hideFollowPoints;
-    s.progressGraph.value = v.progressGraph;
 }
 
 /** The recommended values as short human lines, for the panel and the report. */

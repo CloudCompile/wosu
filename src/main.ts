@@ -13,6 +13,9 @@ async function main(): Promise<void> {
     try {
         const game = await Game.boot(host);
         if (import.meta.env.DEV) (window as unknown as { game: Game }).game = game;
+        // The device dump a bug report needs: `wosuHardware()` in the console
+        // prints the raw hints, the renderer string, the tiers and why.
+        (window as unknown as { wosuHardware: () => string }).wosuHardware = () => game.settings.hardwareReport();
     } catch (e) {
         console.error('failed to start', e);
         showFatal(host, e);

@@ -8,7 +8,7 @@ import type { Renderer } from 'pixi.js';
 import type { GraphicsValues } from '../settings/GraphicsPreset';
 import { resolveTiers, valuesForTiers, type DeviceHints, type DeviceTiers } from '../settings/deviceTiers';
 import { CPU_REFERENCE, cpuIndex, runCpuBench, type CpuTestResult } from './cpu';
-import { runGpuBench, type GpuBenchResult } from './gpu';
+import { BenchmarkCancelled, runGpuBench, type GpuBenchResult } from './gpu';
 import { formatMs, round } from './stats';
 
 export const BENCHMARK_VERSION = 1;
@@ -42,6 +42,8 @@ export interface BenchmarkProgress {
     label: string;
     /** 0..1 overall. */
     fraction: number;
+    /** The running median of the test under way (ms), when it has one. */
+    value?: number;
 }
 
 export interface RunBenchmarkOptions {
@@ -93,8 +95,13 @@ export function recommendValues(report: {
 }): { values: GraphicsValues; reasons: string[] } {
     const values = valuesForTiers(report.tiers);
     const reasons: string[] = [];
-    const budget = 1000 / Math.max(20, Math.min(360, report.refreshHz || 60));
-    reasons.push(`Frame budget: ${formatMs(budget)} at ${Math.round(report.refreshHz || 60)} Hz.`);
+    // A browser reports its display's rate, but a machine already struggling
+    // reports the frames it manages instead (30 Hz on a busy VM), which would
+    // hand out a budget twice the real one. Nothing below 60 Hz is worth
+    // planning for, so that is the floor.
+    const hz = Math.max(60, Math.min(360, report.refreshHz || 60));
+    const budget = 1000 / hz;
+    reasons.push(`Frame budget: ${formatMs(budget)} at ${Math.round(hz)} Hz.`);
 
     if (!report.gpu || report.gpu.scenes.length === 0) {
         reasons.push('The GPU tests could not run, so the render scale comes from the device tiers.');
@@ -139,6 +146,9 @@ export function recommendValues(report: {
     return { values, reasons };
 }
 
+/** Re-exported so the panel can tell a cancelled run from a failed one. */
+export { BenchmarkCancelled };
+
 /** Run the whole benchmark. About 2–3 seconds. */
 export async function runBenchmark(o: RunBenchmarkOptions): Promise<BenchmarkReport> {
     const emit = o.onProgress ?? (() => {});
@@ -146,11 +156,12 @@ export async function runBenchmark(o: RunBenchmarkOptions): Promise<BenchmarkRep
 
     const cpu = await runCpuBench({
         durationMs: o.cpuDurationMs ?? 320,
-        onProgress: u => emit({ stage: 'cpu', label: u.id, fraction: u.fraction * 0.55 }),
+        onProgress: u => emit({ stage: 'cpu', label: u.id, fraction: u.fraction * 0.55, value: u.median }),
         now: o.now,
         yieldTask: o.yieldTask,
         shouldStop: o.shouldStop,
     });
+    if (o.shouldStop?.()) throw new BenchmarkCancelled();
     const index = cpuIndex(cpu);
 
     let gpu: GpuBenchResult | null = null;
@@ -160,12 +171,13 @@ export async function runBenchmark(o: RunBenchmarkOptions): Promise<BenchmarkRep
             gpu = await runGpuBench(o.renderer, {
                 width: o.width,
                 height: o.height,
-                onProgress: u => emit({ stage: 'gpu', label: u.id, fraction: 0.55 + u.fraction * 0.45 }),
+                onProgress: u => emit({ stage: 'gpu', label: u.id, fraction: 0.55 + u.fraction * 0.45, value: u.value }),
                 now: o.now,
                 yieldTask: o.yieldTask,
                 shouldStop: o.shouldStop,
             });
         } catch (e) {
+            if (e instanceof BenchmarkCancelled) throw e;
             // A driver that refuses an off-screen target shouldn't fail the run:
             // the CPU half and the hints still give usable values.
             console.warn('benchmark: GPU tests failed', e);

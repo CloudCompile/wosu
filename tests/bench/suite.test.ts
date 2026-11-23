@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseScale, recommendValues } from '../../src/bench/suite';
+import { BenchmarkCancelled, chooseScale, recommendValues, runBenchmark } from '../../src/bench/suite';
 import type { GpuBenchResult, GpuSceneResult } from '../../src/bench/gpu';
 import { TIERS } from '../../src/settings/GraphicsPreset';
 
@@ -64,6 +64,46 @@ describe('choosing a render scale', () => {
     });
 });
 
+describe('stopping early', () => {
+    const hints = { cores: 4, deviceMemory: 8, mobile: false };
+
+    it('throws as soon as the caller asks to stop', async () => {
+        await expect(runBenchmark({
+            renderer: null, hints, gpuName: null, width: 1280, height: 720, refreshHz: 60,
+            shouldStop: () => true,
+        })).rejects.toBeInstanceOf(BenchmarkCancelled);
+    });
+
+    it('stops between CPU workloads', async () => {
+        let asked = 0;
+        await expect(runBenchmark({
+            renderer: null, hints, gpuName: null, width: 1280, height: 720, refreshHz: 60,
+            cpuDurationMs: 30,
+            // The first check runs before any work, the next after one workload.
+            shouldStop: () => ++asked > 1,
+        })).rejects.toBeInstanceOf(BenchmarkCancelled);
+    });
+});
+
+describe('cancelling', () => {
+    const base = {
+        renderer: null, hints: { cores: 4, deviceMemory: 8, mobile: false },
+        gpuName: null, width: 1280, height: 720, refreshHz: 60,
+        cpuDurationMs: 10, yieldTask: async () => {},
+    };
+
+    it('stops a run the panel was closed on', async () => {
+        const report = runBenchmark({ ...base, shouldStop: () => true });
+        await expect(report).rejects.toBeInstanceOf(BenchmarkCancelled);
+    });
+
+    it('finishes normally when nothing asks it to stop', async () => {
+        const report = await runBenchmark(base);
+        expect(report.cpu.length).toBeGreaterThan(0);
+        expect(report.gpu).toBeNull();
+    });
+});
+
 describe('recommending values', () => {
     it('keeps the balanced look on a fast device', () => {
         const { values, reasons } = recommendValues({
@@ -110,6 +150,18 @@ describe('recommending values', () => {
             refreshHz: 144,
         });
         expect(slow.resolutionScale).toBe(0.9);
+    });
+
+    it('plans for 60 Hz even when the display reports less', () => {
+        // A busy machine reports the frames it manages (30 Hz here), which
+        // would double the budget: 15 ms of a 33 ms frame must not pass.
+        const { values, reasons } = recommendValues({
+            tiers: { cpu: 'mid', gpu: 'integrated' },
+            gpu: gpu([scene(1, 15), scene(0.9, 12), scene(0.8, 10)]),
+            refreshHz: 30,
+        });
+        expect(reasons[0]).toContain('16.7 ms');
+        expect(values.resolutionScale).toBe(0.9);
     });
 
     it('keeps per-frame extras off for a slow CPU', () => {

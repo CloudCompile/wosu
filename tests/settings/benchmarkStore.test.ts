@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { benchmarkToStorage, formatAge, sanitizeStoredBenchmark, type StoredBenchmark } from '../../src/settings/benchmarkStore';
+import { benchmarkToStorage, formatAge, sanitizeStoredBenchmark } from '../../src/settings/benchmarkStore';
 import { TIERS } from '../../src/settings/GraphicsPreset';
 import type { BenchmarkReport } from '../../src/bench/suite';
 

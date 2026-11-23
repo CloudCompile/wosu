@@ -9,7 +9,10 @@ import { DEFAULT_WOSU_SKIN, sanitizeWosuSkin, type WosuSkinOptions } from '../sk
 import {
     applyGraphicsTier, applyGraphicsValues, type GraphicsPreset, type GraphicsPresetTarget,
 } from './GraphicsPreset';
-import { describeTiers, deviceHints, resolveTiers, valuesForTiers, type DeviceTiers } from './deviceTiers';
+import {
+    describeTierInputs, describeTiers, deviceHints, noteUnknownGpu, parseGpu, resolveTieredDevice, shortGpuName,
+    tierOverride, valuesForTiers, type DeviceTiers,
+} from './deviceTiers';
 import { formatAge } from './benchmarkStore';
 
 export type SongSort = 'title' | 'artist' | 'creator' | 'difficulty' | 'length' | 'bpm' | 'dateAdded' | 'lastPlayed';
@@ -208,6 +211,9 @@ export class GameSettings {
                 value.changed.add(() => this.queueSave());
             }
         }
+        // The device line quotes the render scale in use, so it follows the
+        // slider as well as the benchmark.
+        this.resolutionScale.changed.add(() => this.refreshDeviceInfo());
     }
 
     /** Load persisted values (or migrate the old site's settings once). */
@@ -266,8 +272,12 @@ export class GameSettings {
 
     /** Recompute the two device lines the Graphics section shows. */
     refreshDeviceInfo(): void {
+        // A card we have never seen is worth one console line: the raw string
+        // is how the vendor table grows from real reports.
+        noteUnknownGpu(this.measured.gpuName);
         const tiers = this.detectTiers();
-        const gpu = this.measured.gpuName ? ` · ${this.measured.gpuName.replace(/^ANGLE \\(|\\)$/g, '')}` : '';
+        const name = shortGpuName(this.measured.gpuName);
+        const gpu = name ? ` · ${name}` : '';
         this.deviceTiers.value = `${describeTiers(tiers)}${gpu}`;
         this.deviceBenchmark.value = this.measured.at
             ? `Last benchmark ${formatAge(this.measured.at)}: render scale ${Math.round(this.resolutionScale.value * 100)}%, ${describeTiers(tiers)}.`
@@ -279,13 +289,44 @@ export class GameSettings {
      * measured CPU index, the renderer's name), else the browser's hints.
      */
     detectTiers(): DeviceTiers {
+        // `?tiers=high` / `?tiers=low,integrated` wins over every measurement:
+        // an escape hatch for a device the detector reads wrong, and the only
+        // way to see a tier on hardware that does not have one.
+        const forced = tierOverride(typeof location === 'undefined' ? '' : location.search);
+        if (forced) return forced;
+        return this.tierInputs().device.tiers;
+    }
+
+    /** Everything the detector read and concluded, for the debug dump. */
+    private tierInputs(): { hints: ReturnType<typeof deviceHints>; device: ReturnType<typeof resolveTieredDevice> } {
         const m = this.measured;
-        return resolveTiers({
-            hints: deviceHints(),
+        const hints = deviceHints();
+        const device = resolveTieredDevice({
+            hints,
             gpuName: m.gpuName,
             cpuIndex: m.cpuIndex,
             gpuScores: m.fill !== null && m.quads !== null ? { fill: m.fill, quads: m.quads } : null,
         });
+        return { hints, device };
+    }
+
+    /**
+     * The one line behind `window.wosuHardware()`: raw inputs, the tier each
+     * signal produced, and the reason. Paste it into a bug report.
+     */
+    hardwareReport(): string {
+        const m = this.measured;
+        const { hints, device } = this.tierInputs();
+        const info = parseGpu(m.gpuName, { mobile: hints.mobile });
+        const forced = tierOverride(typeof location === 'undefined' ? '' : location.search);
+        const lines = [
+            describeTierInputs(hints, m.gpuName, device),
+            `  vendor ${info.vendor} · model ${info.model ?? 'unknown'} · mobile ${info.mobile}`,
+            `  measured CPU index ${m.cpuIndex ?? 'not run'} · fill ${m.fill ?? '?'} Mpix/s · quads ${m.quads ?? '?'} kquad/s`,
+            `  render scale ${this.resolutionScale.value} · antialias ${this.antialias.value}`,
+        ];
+        if (forced) lines.push(`  ?tiers=${forced.cpu},${forced.gpu} is overriding detection`);
+        return lines.join('\n');
     }
 
     /** Apply a plain object of values; unknown keys and bad types are ignored. */
@@ -325,6 +366,7 @@ export class GameSettings {
         }
         // As on a first run: the auto preset's values, not its bare name.
         this.applyGraphicsPreset();
+        this.refreshDeviceInfo();
     }
 
     private queueSave(): void {

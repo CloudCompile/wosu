@@ -7,7 +7,7 @@
  * and the tab is never blocked long enough for the browser to warn about it.
  */
 import { nextTask } from '../core/nextTask';
-import { summarize, type Summary } from './stats';
+import { hitchLimit, summarize, withoutHitches, type Summary } from './stats';
 
 export interface CpuWorkload {
     readonly id: string;
@@ -190,28 +190,32 @@ async function runWorkload(w: CpuWorkload, o: BenchClock & Pick<CpuBenchOptions,
     const warmStart = now();
     w.run(chunkIters);
     const warmMs = now() - warmStart;
-    if (warmMs > 0.5) chunkIters = Math.max(200, Math.round((chunkIters * o.chunkMs) / warmMs));
+    // Even a fast workload gives a usable estimate; the clock's resolution
+    // can round a very fast one to zero, in which case the loop below grows
+    // the chunk instead.
+    if (warmMs > 0.01) {
+        chunkIters = Math.max(200, Math.min(4_000_000, Math.round((chunkIters * o.chunkMs) / warmMs)));
+    }
     await yieldTask();
 
+    const chunks: { iters: number; ms: number }[] = [];
     const samples: number[] = [];
-    let ops = 0;
-    let totalMs = 0;
-    while (totalMs < o.durationMs) {
+    let stalled = false;
+    while (samples.reduce((a, b) => a + b, 0) < o.durationMs) {
         const t = now();
         w.run(chunkIters);
         const dt = now() - t;
         // A chunk that suddenly takes many times its aim means the device is
         // thrashing (background tab, thermal throttle): stop rather than
-        // burn the whole budget on a stalled chunk.
+        // burn the whole budget on a stalled chunk. The chunk is not counted
+        // as throughput, because a stall is not how fast the CPU can compute.
         if (dt > o.chunkMs * 25 + 25) {
-            samples.push(dt);
-            ops += chunkIters;
-            totalMs += dt;
+            stalled = true;
             break;
         }
+        chunks.push({ iters: chunkIters, ms: dt });
         samples.push(dt);
-        ops += chunkIters;
-        totalMs += dt;
+        const totalMs = samples.reduce((a, b) => a + b, 0);
         // Grow the chunk toward the aim (the first chunks are the warm-up's
         // estimate meeting the real cost of an optimised run).
         const perIter = dt / chunkIters;
@@ -228,7 +232,13 @@ async function runWorkload(w: CpuWorkload, o: BenchClock & Pick<CpuBenchOptions,
         });
         await yieldTask();
     }
-    const timing = summarize(samples);
+    const timing = summarize(withoutHitches(samples));
+    // Throughput from the chunks that were not hitches: one GC pause in the
+    // middle of a 320 ms run would otherwise drag the whole rate down.
+    const limit = hitchLimit(samples);
+    const counted = chunks.filter(c => c.ms <= limit);
+    const ops = counted.reduce((a, c) => a + c.iters, 0);
+    const totalMs = counted.reduce((a, c) => a + c.ms, 0);
     return {
         id: w.id,
         name: w.name,
@@ -238,7 +248,7 @@ async function runWorkload(w: CpuWorkload, o: BenchClock & Pick<CpuBenchOptions,
         timing,
         ops,
         ms: totalMs,
-        stable: timing.count >= 3 && timing.spread <= Math.max(0.35, timing.median * 0.6),
+        stable: !stalled && timing.count >= 3 && timing.spread <= Math.max(0.35, timing.median * 0.6),
     };
 }
 
@@ -254,6 +264,7 @@ export async function runCpuBench(options: CpuBenchOptions = {}): Promise<CpuTes
     };
     const out: CpuTestResult[] = [];
     for (let i = 0; i < CPU_WORKLOADS.length; i++) {
+        if (options.shouldStop?.()) break;
         const w = CPU_WORKLOADS[i];
         out.push(await runWorkload(w, o, i / CPU_WORKLOADS.length, 1 / CPU_WORKLOADS.length));
     }
@@ -261,18 +272,21 @@ export async function runCpuBench(options: CpuBenchOptions = {}): Promise<CpuTes
 }
 
 /**
- * Throughputs of the reference machine (this project's development desktop,
- * a recent 8-core x86) per workload id. A device scoring 1.0 is that
- * machine; the tiers in settings/deviceTiers read the scale from here.
+ * Throughputs of the reference machine per workload id: a typical mid-range
+ * laptop of the kind the Balanced preset is aimed at. A device scoring 1.0
+ * is that machine; the tiers in settings/deviceTiers read the scale from
+ * here (`low` below 0.55, `high` from 1.15).
  *
- * Recalibrate by running `npx vitest run tests/bench/cpu.test.ts --reporter=verbose`
- * with BENCH_PRINT=1 and pasting the printed rates.
+ * The numbers are ~55% of this project's development desktop (a recent
+ * 8-core x86, which therefore scores about 1.8), measured with
+ * `BENCH_PRINT=1 npx vitest run tests/bench/cpu.test.ts`. Recalibrate the
+ * same way if the workloads change, and keep the ratios between the four.
  */
 export const CPU_REFERENCE: Readonly<Record<string, number>> = {
-    'hit-math': 1,
-    'particles': 1,
-    'sort': 1,
-    'text': 1,
+    'hit-math': 16_000_000,
+    'particles': 400_000,
+    'sort': 4_200_000,
+    'text': 91_000_000,
 };
 
 /** Composite CPU index: 1.0 = the reference machine (geometric mean over workloads). */

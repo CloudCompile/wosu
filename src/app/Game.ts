@@ -46,6 +46,7 @@ import { VolumeOverlay } from '../overlays/VolumeOverlay';
 import type { ProfileOverlay } from '../overlays/profile/ProfileOverlay';
 import { LocalProfile } from './Profile';
 import { GameSettings } from '../settings/Settings';
+import { rendererGpuName } from '../settings/deviceTiers';
 import { Skin } from '../skin/Skin';
 import { menuSkin } from '../skin/MenuSkin';
 import { DEFAULT_SKIN_URL, SkinManager } from '../skin/SkinManager';
@@ -151,6 +152,10 @@ export class Game {
             antialias: settings.antialias.value,
             lowLatency: settings.lowLatency.value,
         });
+        // The renderer's name is the best cheap hint there is (a named card
+        // beats any benchmark guess), and reading it costs nothing, so do it
+        // now rather than waiting for a Personalize run.
+        if (!settings.measured.gpuName) settings.measured.gpuName = rendererGpuName(app.renderer);
         const loading = showBootSpinner(app);
         const skin = new Skin();
         const skins = new SkinManager();

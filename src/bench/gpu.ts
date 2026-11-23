@@ -12,7 +12,7 @@
  */
 import { Container, Graphics, RenderTexture, Sprite, type Renderer, type Texture } from 'pixi.js';
 import { nextTask } from '../core/nextTask';
-import { summarize, type Summary } from './stats';
+import { summarize, withoutHitches, type Summary } from './stats';
 
 /** The scene is laid out in this space and scaled to each test size. */
 const DESIGN_W = 1280;
@@ -71,6 +71,8 @@ export interface GpuProgress {
     id: string;
     /** Overall progress 0..1. */
     fraction: number;
+    /** The frame just timed (ms), for the panel's live numbers. */
+    value?: number;
 }
 
 export interface GpuBenchResult {
@@ -207,6 +209,7 @@ async function timeScene(
     samples: number,
     now: () => number,
     yieldTask: () => Promise<void>,
+    onSample?: (ms: number, index: number, total: number) => void,
 ): Promise<Summary> {
     const target = RenderTexture.create({ width, height, resolution: 1, antialias: false });
     root.scale.set(width / DESIGN_W, height / DESIGN_H);
@@ -221,9 +224,11 @@ async function timeScene(
             renderer.render({ container: root, target, clear: true });
             await finishGpu(renderer);
             times.push(now() - t);
+            onSample?.(times[i], i, samples);
             await yieldTask();
         }
-        return summarize(times);
+        // A lone 300 ms frame is a hitch, not the card's speed.
+        return summarize(withoutHitches(times));
     } finally {
         target.destroy(true);
     }
@@ -237,6 +242,7 @@ async function timeFill(
     samples: number,
     now: () => number,
     yieldTask: () => Promise<void>,
+    onSample?: (ms: number, index: number, total: number) => void,
 ): Promise<Summary> {
     const quad = quadTexture(renderer);
     const root = new Container();
@@ -248,7 +254,7 @@ async function timeFill(
         root.addChild(s);
     }
     try {
-        return await timeScene(renderer, root, width, height, samples, now, yieldTask);
+        return await timeScene(renderer, root, width, height, samples, now, yieldTask, onSample);
     } finally {
         root.destroy({ children: true });
         quad.destroy(true);
@@ -263,6 +269,7 @@ async function timeQuads(
     samples: number,
     now: () => number,
     yieldTask: () => Promise<void>,
+    onSample?: (ms: number, index: number, total: number) => void,
 ): Promise<Summary> {
     const quad = quadTexture(renderer);
     const root = new Container();
@@ -275,10 +282,18 @@ async function timeQuads(
         root.addChild(s);
     }
     try {
-        return await timeScene(renderer, root, width, height, samples, now, yieldTask);
+        return await timeScene(renderer, root, width, height, samples, now, yieldTask, onSample);
     } finally {
         root.destroy({ children: true });
         quad.destroy(true);
+    }
+}
+
+/** Thrown when the caller asked to stop the run (the panel was closed). */
+export class BenchmarkCancelled extends Error {
+    constructor() {
+        super('benchmark cancelled');
+        this.name = 'BenchmarkCancelled';
     }
 }
 
@@ -290,17 +305,27 @@ export async function runGpuBench(renderer: Renderer, options: GpuBenchOptions):
     const now = options.now ?? (() => performance.now());
     const yieldTask = options.yieldTask ?? nextTask;
     const samples = Math.max(3, options.samples ?? 7);
-    const progress = (id: string, fraction: number) => options.onProgress?.({ id, fraction });
+    const progress = (id: string, fraction: number, value?: number) => options.onProgress?.({ id, fraction, value });
+    const stop = () => options.shouldStop?.() === true;
+    // Each frame a measurement times is reported with its own milliseconds,
+    // so the panel can draw the sparkline while the run is still going.
+    const live = (id: string, fraction: number) => (ms: number) => progress(id, fraction, ms);
 
     const scene = buildScene(renderer);
     const scenes: GpuSceneResult[] = [];
     try {
         for (let i = 0; i < SCENE_SCALES.length; i++) {
+            // The panel may have been closed: each measurement costs a few
+            // frames, so only check between them.
+            if (stop()) break;
             const scale = SCENE_SCALES[i];
             const width = Math.max(160, Math.round(options.width * scale));
             const height = Math.max(90, Math.round(options.height * scale));
-            progress(sceneId(scale), i / (SCENE_SCALES.length + 2));
-            const timing = await timeScene(renderer, scene.root, width, height, samples, now, yieldTask);
+            const stage = i / (SCENE_SCALES.length + 2);
+            progress(sceneId(scale), stage);
+            const timing = await timeScene(
+                renderer, scene.root, width, height, samples, now, yieldTask, live(sceneId(scale), stage),
+            );
             scenes.push({ scale, width, height, timing, stable: timing.count >= 3 && timing.spread <= Math.max(0.3, timing.median * 0.5) });
         }
     } finally {
@@ -308,8 +333,12 @@ export async function runGpuBench(renderer: Renderer, options: GpuBenchOptions):
         for (const t of scene.textures) t.destroy(true);
     }
 
-    progress('fill', SCENE_SCALES.length / (SCENE_SCALES.length + 2));
-    const fillTiming = await timeFill(renderer, options.width, options.height, samples, now, yieldTask);
+    if (options.shouldStop?.()) throw new BenchmarkCancelled();
+    const fillStage = SCENE_SCALES.length / (SCENE_SCALES.length + 2);
+    progress('fill', fillStage);
+    const fillTiming = stop()
+        ? summarize([])
+        : await timeFill(renderer, options.width, options.height, samples, now, yieldTask, live('fill', fillStage));
     const fill: GpuFillResult = {
         width: options.width,
         height: options.height,
@@ -320,8 +349,11 @@ export async function runGpuBench(renderer: Renderer, options: GpuBenchOptions):
         stable: fillTiming.count >= 3 && fillTiming.spread <= Math.max(0.3, fillTiming.median * 0.5),
     };
 
-    progress('quads', (SCENE_SCALES.length + 1) / (SCENE_SCALES.length + 2));
-    const quadTiming = await timeQuads(renderer, options.width, options.height, samples, now, yieldTask);
+    const quadStage = (SCENE_SCALES.length + 1) / (SCENE_SCALES.length + 2);
+    if (!stop()) progress('quads', quadStage);
+    const quadTiming = stop()
+        ? summarize([])
+        : await timeQuads(renderer, options.width, options.height, samples, now, yieldTask, live('quads', quadStage));
     const quads: GpuQuadResult = {
         quads: 4000,
         timing: quadTiming,

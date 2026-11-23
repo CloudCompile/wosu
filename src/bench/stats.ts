@@ -63,6 +63,41 @@ export function summarize(values: readonly number[]): Summary {
 }
 
 /**
+ * The largest sample still believable as this device's speed.
+ *
+ * One frame of 250 ms among fast ones is a GC pause, a shader compile or a
+ * compositor hitch, not the GPU; dropping it keeps a hitch from halving the
+ * recommended render scale. A device whose median sample is already slow
+ * keeps every sample (the limit is infinite), so this can only rescue a
+ * measurement, never flatter a slow device.
+ */
+export function hitchLimit(values: readonly number[]): number {
+    if (values.length < 4) return Infinity;
+    const median = percentile(sortAscending(values.slice()), 0.5);
+    if (median >= 100) return Infinity;
+    return Math.max(250, median * 8);
+}
+
+/**
+ * The samples without the ones that are clearly not this device's speed: a
+ * frame or two of 250 ms or more among fast ones is a GC pause, a shader
+ * compile or a compositor hitch, and one of those would otherwise halve the
+ * recommended render scale. A device whose median sample is already slow
+ * keeps every sample (the limit is infinite), so this can only rescue a
+ * measurement, never flatter a slow device. Always returns at least three
+ * samples when the input had them, so a run of hitches stays visible as an
+ * unstable result rather than an empty one.
+ */
+export function withoutHitches(values: readonly number[]): number[] {
+    if (values.length < 4) return values.slice();
+    const median = percentile(sortAscending(values.slice()), 0.5);
+    if (median >= 100) return values.slice();
+    const limit = Math.max(250, median * 8);
+    const kept = values.filter(v => v <= limit);
+    return kept.length >= 3 ? kept : values.slice();
+}
+
+/**
  * How much `summary` looks like a measurement worth trusting: false when the
  * samples are erratic (a stalled tab, a compositing hitch) — the benchmark
  * marks those tests as unreliable instead of recommending settings from them.

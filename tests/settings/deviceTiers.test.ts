@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
     cpuTierFromHints, cpuTierFromIndex, describeTiers, deviceHints, gpuNameOf, gpuTierFromName,
-    gpuTierFromScores, guessTiers, resolveTiers, valuesForTiers, type DeviceHints,
+    gpuTierFromScores, guessTiers, noteUnknownGpu, parseGpu, resolveTiers, shortGpuName, tierOverride,
+    valuesForTiers,
+    type DeviceHints,
 } from '../../src/settings/deviceTiers';
 import { TIERS } from '../../src/settings/GraphicsPreset';
 
@@ -53,6 +55,33 @@ describe('gpu tier from the renderer name', () => {
         const gpu = { info: { vendor: 'apple', architecture: 'metal-3', device: 'Apple M3' } };
         expect(gpuNameOf(gpu)).toBe('apple metal-3 Apple M3');
         expect(gpuNameOf(null)).toBeNull();
+    });
+});
+
+describe('short gpu names', () => {
+    it('picks the card out of the renderer string', () => {
+        expect(shortGpuName('ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)')).toBe('NVIDIA GeForce RTX 3060');
+        expect(shortGpuName('ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)')).toBe('Intel Iris Xe Graphics');
+        expect(shortGpuName('ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)')).toBe('AMD Radeon Graphics');
+        expect(shortGpuName('ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version')).toBe('Apple M2 Pro');
+        expect(shortGpuName('Adreno (TM) 740')).toBe('Adreno 740');
+    });
+
+    it('says so when the GPU is the CPU', () => {
+        expect(shortGpuName('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)'))
+            .toBe('SwiftShader (software)');
+        expect(shortGpuName('llvmpipe (LLVM 15.0.7, 256 bits)')).toBe('software renderer');
+    });
+
+    it('keeps a long name from overflowing a row', () => {
+        const name = shortGpuName('ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Laptop GPU with Max-Q Design and Optimus Technology, D3D11)');
+        expect(name.length).toBeLessThanOrEqual(41);
+        expect(name.endsWith('…')).toBe(true);
+    });
+
+    it('has nothing to say about an unknown GPU', () => {
+        expect(shortGpuName(null)).toBe('');
+        expect(shortGpuName('')).toBe('');
     });
 });
 
@@ -176,5 +205,135 @@ describe('values for tiers', () => {
                 expect(v.resolutionScale).toBeLessThanOrEqual(1);
             }
         }
+    });
+});
+
+/**
+ * The real strings, not invented ones. These are the formats browsers hand
+ * out today; the table is the regression test for the parser, and the place
+ * to add a line when a report brings a new card.
+ */
+describe('real renderer strings', () => {
+    const cases: [string | null, string | null][] = [
+        // Intel
+        ['ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'integrated'],
+        ['ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', 'integrated'],
+        ['ANGLE (Intel, Intel(R) Arc(TM) A770 Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete'],
+        ['ANGLE (Intel, Intel(R) HD Graphics 4600 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'low'],
+        ['Mesa Intel(R) UHD Graphics 620 (CFL GT2)', 'integrated'],
+        // NVIDIA: a laptop part is a class below its desktop twin
+        ['ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Laptop GPU Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete'],
+        ['ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'high'],
+        ['ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete'],
+        ['ANGLE (NVIDIA, NVIDIA GeForce RTX 3050 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete'],
+        // Apple: the model number is optional, and missing means iOS
+        ['ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)', 'discrete'],
+        ['ANGLE (Apple, ANGLE Metal Renderer: Apple GPU, Unspecified Version)', 'integrated'],
+        // Phones and software
+        ['Adreno (TM) 740', 'low'],
+        ['Mali-G78 MP14', 'low'],
+        ['ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)', 'low'],
+        // Negatives: no opinion, so the caller falls back
+        ['', null],
+        [null, null],
+        ['Mozilla', null],
+        ['WebKit WebGL', null],
+        ['Deliberately Unknown Card 9000', null],
+    ];
+
+    it.each(cases)('%s', (name, tier) => {
+        expect(gpuTierFromName(name)).toBe(tier);
+    });
+
+    it('reads "Apple GPU" on a phone as a phone GPU', () => {
+        expect(gpuTierFromName('ANGLE (Apple, ANGLE Metal Renderer: Apple GPU, Unspecified Version)', { mobile: true }))
+            .toBe(('low'));
+    });
+
+    it('keeps the raw string and the vendor for an unknown card', () => {
+        const info = parseGpu('Deliberately Unknown Card 9000');
+        expect(info.raw).toBe('Deliberately Unknown Card 9000');
+        expect(info.vendor).toBe('unknown');
+        expect(info.model).toBeNull();
+        expect(info.tier).toBeNull();
+    });
+});
+
+describe('order sensitivity', () => {
+    it('matches the longest Apple chip name first', () => {
+        expect(gpuTierFromName('ANGLE Metal Renderer: Apple M2, Unspecified Version')).toBe('integrated');
+        expect(gpuTierFromName('ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version')).toBe('discrete');
+        expect(gpuTierFromName('ANGLE Metal Renderer: Apple M2 Max, Unspecified Version')).toBe('high');
+        expect(gpuTierFromName('ANGLE Metal Renderer: Apple M2 Ultra, Unspecified Version')).toBe('high');
+    });
+
+    it('matches Iris Xe before plain Iris', () => {
+        expect(gpuTierFromName('ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL)')).toBe('integrated');
+        expect(gpuTierFromName('ANGLE (Intel, Intel(R) Iris(R) Plus Graphics 655, OpenGL)')).toBe('integrated');
+    });
+
+    it('rates by model number, not by the RTX prefix', () => {
+        expect(gpuTierFromName('ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11, D3D11)')).toBe('high');
+        expect(gpuTierFromName('ANGLE (NVIDIA, NVIDIA GeForce RTX 3050 Direct3D11, D3D11)')).toBe('discrete');
+        expect(gpuTierFromName('ANGLE (NVIDIA, NVIDIA GeForce RTX 3050 Laptop GPU Direct3D11, D3D11)')).toBe('discrete');
+    });
+
+    it('calls SwiftShader software before its "Google" and "Vulkan 1.3" words', () => {
+        const info = parseGpu('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)');
+        expect(info.vendor).toBe('software');
+        expect(info.tier).toBe('low');
+    });
+});
+
+describe('browsers that do not answer', () => {
+    it('treats a missing API as unknown, never as zero', () => {
+        const bare = {} as Navigator;
+        const win = { matchMedia: () => ({ matches: false }) } as unknown as Window;
+        expect(deviceHints(bare, win)).toEqual({ cores: 0, deviceMemory: 0, mobile: false });
+        // Unknown hints must land in the middle, not the top or the bottom.
+        expect(cpuTierFromHints({ cores: 0, deviceMemory: 0, mobile: false })).toBe('mid');
+        expect(guessTiers({ cores: 0, deviceMemory: 0, mobile: false }, null).gpu).toBe('integrated');
+    });
+
+    it('has no name when the renderer masks it to an empty string', () => {
+        const gl = { getParameter: () => '', getExtension: () => null };
+        expect(gpuNameOf(gl)).toBeNull();
+        const maskedExt = {
+            getParameter: (p: number) => (p === 0x9245 ? '' : 'WebKit WebGL'),
+            getExtension: () => ({ UNMASKED_RENDERER_WEBGL: 0x9245 }),
+        };
+        expect(gpuNameOf(maskedExt)).toBeNull();
+    });
+
+    it('puts an unknown desktop card in the middle tier', () => {
+        expect(guessTiers(desktop(8, 8), 'Deliberately Unknown Card 9000'))
+            .toEqual({ cpu: 'high', gpu: 'integrated' });
+    });
+
+    it('logs an unrecognised renderer once, with the raw text', () => {
+        const seen: string[] = [];
+        const original = console.info;
+        console.info = (...args: unknown[]) => { seen.push(args.join(' ')); };
+        try {
+            noteUnknownGpu('Some Vendor Card 1234');
+            noteUnknownGpu('Some Vendor Card 1234');
+            noteUnknownGpu('ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11, D3D11)');
+            noteUnknownGpu(null);
+        } finally {
+            console.info = original;
+        }
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).toContain('Some Vendor Card 1234');
+    });
+});
+
+describe('the ?tiers escape hatch', () => {
+    it('reads a pair, a single GPU name, or nothing', () => {
+        expect(tierOverride('?tiers=high,low')).toEqual({ cpu: 'high', gpu: 'low' });
+        expect(tierOverride('?foo=1&tiers=high')).toEqual({ cpu: 'mid', gpu: 'high' });
+        expect(tierOverride('?tiers=integrated')).toEqual({ cpu: 'mid', gpu: 'integrated' });
+        expect(tierOverride('')).toBeNull();
+        expect(tierOverride('?tiers=nonsense')).toBeNull();
+        expect(tierOverride('?tiers=high,potato')).toBeNull();
     });
 });
